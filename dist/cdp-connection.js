@@ -1,10 +1,6 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CdpConnection = void 0;
-const ws_1 = __importDefault(require("ws"));
 class CdpConnection {
     ws = null;
     nextId = 1;
@@ -19,11 +15,12 @@ class CdpConnection {
     }
     connect() {
         return new Promise((resolve, reject) => {
-            this.ws = new ws_1.default(this.wsUrl);
-            this.ws.on('open', () => { resolve(); });
-            this.ws.on('error', (err) => { reject(err); });
-            this.ws.on('message', (raw) => {
-                const msg = JSON.parse(raw.toString());
+            const ws = new WebSocket(this.wsUrl);
+            this.ws = ws;
+            ws.onopen = () => { resolve(); };
+            ws.onerror = (ev) => { reject(new Error(`WebSocket error: ${String(ev)}`)); };
+            ws.onmessage = (ev) => {
+                const msg = JSON.parse(String(ev.data));
                 if ('id' in msg) {
                     const p = this.pending.get(msg.id);
                     if (p) {
@@ -38,10 +35,10 @@ class CdpConnection {
                     return;
                 }
                 this.handleEvent(msg);
-            });
-            this.ws.on('close', () => {
+            };
+            ws.onclose = () => {
                 this.onDisconnect?.('WebSocket closed');
-            });
+            };
         });
     }
     disconnect() {
@@ -125,7 +122,7 @@ class CdpConnection {
     }
     send(method, params) {
         return new Promise((resolve, reject) => {
-            if (!this.ws || this.ws.readyState !== ws_1.default.OPEN) {
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
                 reject(new Error('Not connected'));
                 return;
             }

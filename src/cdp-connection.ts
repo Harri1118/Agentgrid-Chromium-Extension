@@ -1,5 +1,3 @@
-import WebSocket from 'ws'
-
 type CdpResponse = {
   id: number
   result?: Record<string, unknown>
@@ -66,13 +64,16 @@ export class CdpConnection {
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(this.wsUrl)
+      const ws = new WebSocket(this.wsUrl)
 
-      this.ws.on('open', () => { resolve() })
-      this.ws.on('error', (err) => { reject(err) })
+      this.ws = ws
 
-      this.ws.on('message', (raw: WebSocket.Data) => {
-        const msg = JSON.parse(raw.toString()) as CdpResponse | CdpEvent
+      ws.onopen = () => { resolve() }
+
+      ws.onerror = (ev) => { reject(new Error(`WebSocket error: ${String(ev)}`)) }
+
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(String(ev.data)) as CdpResponse | CdpEvent
 
         if ('id' in msg) {
           const p = this.pending.get(msg.id)
@@ -91,11 +92,11 @@ export class CdpConnection {
         }
 
         this.handleEvent(msg)
-      })
+      }
 
-      this.ws.on('close', () => {
+      ws.onclose = () => {
         this.onDisconnect?.('WebSocket closed')
-      })
+      }
     })
   }
 
