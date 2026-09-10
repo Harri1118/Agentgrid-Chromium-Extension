@@ -70,11 +70,10 @@ async function activate(context) {
 }
 function registerLightweightEngine(context, chromeVersion) {
     const userAgent = buildChromeUserAgent(chromeVersion ?? undefined);
-    const versionSuffix = chromeVersion ? ` (Chrome ${chromeVersion} UA)` : '';
-    console.log(`[chromium-engine] lightweight engine: Chrome UA${versionSuffix}`);
+    console.log('[chromium-engine] lightweight engine: Chrome (Lightweight)');
     const registration = __agentgrid_api.browserEngines.registerBrowserEngine({
         id: 'chrome-lightweight',
-        label: `Lightweight${versionSuffix}`,
+        label: 'Chrome (Lightweight)',
         description: 'Mimics Chrome for site compatibility but does not support Chrome extensions',
         userAgent,
     });

@@ -42,12 +42,14 @@ export function launchChrome(chromePath: string, sessionId: string, workspaceId:
   const url = startUrl || 'about:blank'
 
   const args = [
+    '--headless=new',
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${userDataDir}`,
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-background-networking',
     '--disable-sync',
+    '--enable-extensions',
     url,
   ]
 
@@ -167,7 +169,8 @@ export function listInstalledExtensions(workspaceId: string): InstalledExtension
 
     if (!latestVersion) { continue }
 
-    const manifestPath = path.join(extPath, latestVersion, 'manifest.json')
+    const versionDir = path.join(extPath, latestVersion)
+    const manifestPath = path.join(versionDir, 'manifest.json')
 
     if (!fs.existsSync(manifestPath)) { continue }
 
@@ -176,6 +179,7 @@ export function listInstalledExtensions(workspaceId: string): InstalledExtension
         name?: string
         version?: string
         description?: string
+        default_locale?: string
         browser_action?: { default_popup?: string }
         action?: { default_popup?: string; default_icon?: string | Record<string, string> }
         options_page?: string
@@ -195,11 +199,16 @@ export function listInstalledExtensions(workspaceId: string): InstalledExtension
       const iconSizes = Object.keys(iconMap).map(Number).sort((a, b) => b - a)
       const bestIcon = iconSizes[0] ? iconMap[String(iconSizes[0])] ?? null : null
 
+      const rawName = manifest.name ?? extId
+      const rawDesc = manifest.description ?? ''
+      const name = resolveI18n(rawName, versionDir, manifest.default_locale)
+      const description = resolveI18n(rawDesc, versionDir, manifest.default_locale)
+
       results.push({
         id: extId,
-        name: manifest.name ?? extId,
+        name,
         version: manifest.version ?? '0.0.0',
-        description: manifest.description ?? '',
+        description,
         popupPath: popup,
         optionsPath: options,
         iconPath: bestIcon,
@@ -218,6 +227,31 @@ function readdirSafe(dir: string): string[] {
   } catch {
     return []
   }
+}
+
+function resolveI18n(raw: string, versionDir: string, defaultLocale?: string): string {
+  const match = /^__MSG_(\w+)__$/.exec(raw)
+
+  if (!match) { return raw }
+
+  const key = match[1]
+  const locale = defaultLocale ?? 'en'
+  const candidates = [locale, 'en', 'en_US']
+
+  for (const loc of candidates) {
+    const msgPath = path.join(versionDir, '_locales', loc, 'messages.json')
+
+    try {
+      const messages = JSON.parse(fs.readFileSync(msgPath, 'utf-8')) as Record<string, { message?: string }>
+      const entry = messages[key] ?? messages[key.toLowerCase()]
+
+      if (entry?.message) { return entry.message }
+    } catch {
+      continue
+    }
+  }
+
+  return raw
 }
 
 export function clearBrowserData(workspaceId: string): boolean {

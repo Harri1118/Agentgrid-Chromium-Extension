@@ -30,12 +30,14 @@ function launchChrome(chromePath, sessionId, workspaceId, startUrl) {
     const userDataDir = buildUserDataDir(workspaceId);
     const url = startUrl || 'about:blank';
     const args = [
+        '--headless=new',
         `--remote-debugging-port=${port}`,
         `--user-data-dir=${userDataDir}`,
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-background-networking',
         '--disable-sync',
+        '--enable-extensions',
         url,
     ];
     return new Promise((resolve, reject) => {
@@ -123,7 +125,8 @@ function listInstalledExtensions(workspaceId) {
         if (!latestVersion) {
             continue;
         }
-        const manifestPath = node_path_1.default.join(extPath, latestVersion, 'manifest.json');
+        const versionDir = node_path_1.default.join(extPath, latestVersion);
+        const manifestPath = node_path_1.default.join(versionDir, 'manifest.json');
         if (!node_fs_1.default.existsSync(manifestPath)) {
             continue;
         }
@@ -138,11 +141,15 @@ function listInstalledExtensions(workspaceId) {
             const iconMap = manifest.icons ?? {};
             const iconSizes = Object.keys(iconMap).map(Number).sort((a, b) => b - a);
             const bestIcon = iconSizes[0] ? iconMap[String(iconSizes[0])] ?? null : null;
+            const rawName = manifest.name ?? extId;
+            const rawDesc = manifest.description ?? '';
+            const name = resolveI18n(rawName, versionDir, manifest.default_locale);
+            const description = resolveI18n(rawDesc, versionDir, manifest.default_locale);
             results.push({
                 id: extId,
-                name: manifest.name ?? extId,
+                name,
                 version: manifest.version ?? '0.0.0',
-                description: manifest.description ?? '',
+                description,
                 popupPath: popup,
                 optionsPath: options,
                 iconPath: bestIcon,
@@ -161,6 +168,29 @@ function readdirSafe(dir) {
     catch {
         return [];
     }
+}
+function resolveI18n(raw, versionDir, defaultLocale) {
+    const match = /^__MSG_(\w+)__$/.exec(raw);
+    if (!match) {
+        return raw;
+    }
+    const key = match[1];
+    const locale = defaultLocale ?? 'en';
+    const candidates = [locale, 'en', 'en_US'];
+    for (const loc of candidates) {
+        const msgPath = node_path_1.default.join(versionDir, '_locales', loc, 'messages.json');
+        try {
+            const messages = JSON.parse(node_fs_1.default.readFileSync(msgPath, 'utf-8'));
+            const entry = messages[key] ?? messages[key.toLowerCase()];
+            if (entry?.message) {
+                return entry.message;
+            }
+        }
+        catch {
+            continue;
+        }
+    }
+    return raw;
 }
 function clearBrowserData(workspaceId) {
     const profileDir = node_path_1.default.join(node_os_1.default.homedir(), '.agentgrid', 'chrome-profiles', workspaceId);
