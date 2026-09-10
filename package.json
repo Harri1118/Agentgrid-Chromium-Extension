@@ -1,8 +1,8 @@
 {
   "name": "agentgrid-chromium",
-  "displayName": "Chromium Browser Engine",
-  "version": "0.1.0",
-  "description": "Adds Chromium as a selectable browser engine for AgentGrid browser panes.",
+  "displayName": "Chrome Browser Engines",
+  "version": "0.2.0",
+  "description": "Adds Lightweight (UA spoofing) and full Google Chrome (CDP screencast) browser engines for AgentGrid.",
   "publisher": "agentgrid",
   "main": "dist/extension.js",
   "license": "MIT",
@@ -18,19 +18,16 @@
   "contributes": {
     "browserEngines": [
       {
-        "id": "chrome-system",
-        "label": "Google Chrome (System)",
-        "description": "Uses your installed Google Chrome — version detected at startup"
+        "id": "chrome-lightweight",
+        "label": "Lightweight",
+        "description": "Mimics Chrome for site compatibility but does not support Chrome extensions"
       },
       {
-        "id": "chrome-bundled",
-        "label": "Chromium (Bundled)",
-        "description": "Standalone Chromium managed by AgentGrid — independent of your system browser"
+        "id": "chrome-full",
+        "label": "Google Chrome",
+        "description": "Full Google Chrome with extension support, rendered via screen streaming"
       }
     ]
-  },
-  "dependencies": {
-    "playwright-core": "^1.52.0"
   },
   "devDependencies": {
     "typescript": "^5.8.0",

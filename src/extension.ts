@@ -1,7 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import os from 'node:os'
 import fs from 'node:fs'
-import path from 'node:path'
 
 type Disposable = { dispose(): void }
 
@@ -92,102 +91,56 @@ function buildChromeUserAgent(version?: string): string {
   return `Mozilla/5.0 (${osString}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${v} Safari/537.36`
 }
 
-// ── Bundled Chromium via Playwright ─────────────────────────────────
-
-function getBundledChromiumVersion(extensionRoot: string): string | null {
-  try {
-    const browsersJson = path.join(extensionRoot, 'node_modules', 'playwright-core', 'browsers.json')
-
-    if (!fs.existsSync(browsersJson)) { return null }
-
-    const data = JSON.parse(fs.readFileSync(browsersJson, 'utf-8')) as {
-      browsers?: Array<{ name?: string; browserVersion?: string }>
-    }
-    const chromium = data.browsers?.find((b) => b.name === 'chromium')
-
-    return chromium?.browserVersion ?? null
-  } catch {
-    return null
-  }
-}
-
-function installBundledChromium(extensionRoot: string): void {
-  try {
-    execFileSync('npx', ['playwright-core', 'install', 'chromium'], {
-      cwd: extensionRoot,
-      stdio: 'inherit',
-      timeout: 120_000,
-    })
-
-    console.log('[chromium-engine] bundled Chromium installed')
-  } catch (err) {
-    console.error('[chromium-engine] failed to install bundled Chromium:', err)
-  }
-}
-
 // ── Activate ────────────────────────────────────────────────────────
 
 export async function activate(context: ExtensionContext): Promise<void> {
   console.log('[chromium-engine] activating')
 
-  const extensionRoot = path.join(__dirname, '..')
+  const chromePath = findChromePath()
+  const chromeVersion = chromePath ? getChromeVersion(chromePath) : null
 
-  registerSystemChrome(context)
-  registerBundledChromium(context, extensionRoot)
+  registerLightweightEngine(context, chromeVersion)
+  registerFullChromeEngine(context, chromePath, chromeVersion)
 
   const currentEngine = __agentgrid_api.settings.get('browserEngine')
 
   if (!currentEngine || currentEngine === 'built-in') {
-    __agentgrid_api.settings.update('browserEngine', 'chrome-bundled')
-    console.log('[chromium-engine] auto-activated chrome-bundled as default engine')
+    __agentgrid_api.settings.update('browserEngine', 'chrome-lightweight')
+    console.log('[chromium-engine] auto-activated chrome-lightweight as default engine')
   }
 }
 
-function registerSystemChrome(context: ExtensionContext): void {
-  const chromePath = findChromePath()
+function registerLightweightEngine(context: ExtensionContext, chromeVersion: string | null): void {
+  const userAgent = buildChromeUserAgent(chromeVersion ?? undefined)
+  const versionSuffix = chromeVersion ? ` (Chrome ${chromeVersion} UA)` : ''
 
-  if (!chromePath) {
-    console.log('[chromium-engine] system Chrome not found, skipping system engine')
-
-    return
-  }
-
-  const version = getChromeVersion(chromePath)
-
-  if (!version) {
-    console.warn('[chromium-engine] could not detect system Chrome version')
-
-    return
-  }
-
-  const userAgent = buildChromeUserAgent(version)
-
-  console.log(`[chromium-engine] system Chrome ${version} at ${chromePath}`)
+  console.log(`[chromium-engine] lightweight engine: Chrome UA${versionSuffix}`)
 
   const registration = __agentgrid_api.browserEngines.registerBrowserEngine({
-    id: 'chrome-system',
-    label: `Google Chrome ${version} (System)`,
-    description: `Uses your installed Google Chrome at ${chromePath}`,
+    id: 'chrome-lightweight',
+    label: `Lightweight${versionSuffix}`,
+    description: 'Mimics Chrome for site compatibility but does not support Chrome extensions',
     userAgent,
   })
 
   context.subscriptions.push(registration)
 }
 
-function registerBundledChromium(context: ExtensionContext, extensionRoot: string): void {
-  installBundledChromium(extensionRoot)
+function registerFullChromeEngine(context: ExtensionContext, chromePath: string | null, chromeVersion: string | null): void {
+  if (!chromePath) {
+    console.log('[chromium-engine] system Chrome not found, skipping full Chrome engine')
 
-  const bundledVersion = getBundledChromiumVersion(extensionRoot)
-  const bundledUA = buildChromeUserAgent(bundledVersion ?? undefined)
-  const label = bundledVersion ? `Chromium ${bundledVersion} (Bundled)` : 'Chromium (Bundled)'
+    return
+  }
 
-  console.log(`[chromium-engine] bundled Chromium: ${bundledVersion ?? 'unknown version'}`)
+  const versionLabel = chromeVersion ? ` ${chromeVersion}` : ''
+
+  console.log(`[chromium-engine] full Chrome engine: ${chromePath}`)
 
   const registration = __agentgrid_api.browserEngines.registerBrowserEngine({
-    id: 'chrome-bundled',
-    label,
-    description: 'Standalone Chromium managed by AgentGrid — independent of your system browser',
-    userAgent: bundledUA,
+    id: 'chrome-full',
+    label: `Google Chrome${versionLabel}`,
+    description: `Full Google Chrome with extension support, rendered via screen streaming from ${chromePath}`,
   })
 
   context.subscriptions.push(registration)
