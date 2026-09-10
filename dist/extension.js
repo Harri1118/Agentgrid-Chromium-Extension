@@ -8,6 +8,8 @@ exports.deactivate = deactivate;
 const node_child_process_1 = require("node:child_process");
 const node_os_1 = __importDefault(require("node:os"));
 const node_fs_1 = __importDefault(require("node:fs"));
+const cdp_manager_1 = require("./cdp-manager");
+const cdp_connection_1 = require("./cdp-connection");
 // ── System Chrome detection ─────────────────────────────────────────
 const CHROME_PATHS = {
     darwin: ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'],
@@ -50,6 +52,8 @@ function buildChromeUserAgent(version) {
             : 'X11; Linux x86_64';
     return `Mozilla/5.0 (${osString}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${v} Safari/537.36`;
 }
+// ── CDP connections (screencast sessions) ───────────────────────────
+const cdpConnections = new Map();
 // ── Activate ────────────────────────────────────────────────────────
 async function activate(context) {
     console.log('[chromium-engine] activating');
@@ -57,6 +61,7 @@ async function activate(context) {
     const chromeVersion = chromePath ? getChromeVersion(chromePath) : null;
     registerLightweightEngine(context, chromeVersion);
     registerFullChromeEngine(context, chromePath, chromeVersion);
+    registerCdpCommands(context, chromePath);
     const currentEngine = __agentgrid_api.settings.get('browserEngine');
     if (!currentEngine || currentEngine === 'built-in') {
         __agentgrid_api.settings.update('browserEngine', 'chrome-lightweight');
@@ -89,6 +94,93 @@ function registerFullChromeEngine(context, chromePath, chromeVersion) {
     });
     context.subscriptions.push(registration);
 }
+let onFrameCallback = null;
+let onSessionEndCallback = null;
+function registerCdpCommands(context, chromePath) {
+    const reg = (id, handler) => {
+        context.subscriptions.push(__agentgrid_api.commands.registerCommand(id, handler));
+    };
+    reg('cdp.launch', async (...args) => {
+        const opts = args[0];
+        if (!chromePath) {
+            return { ok: false, error: 'Google Chrome is not installed' };
+        }
+        try {
+            const session = await (0, cdp_manager_1.launchChrome)(chromePath, opts.sessionId, opts.workspaceId, opts.url);
+            const conn = new cdp_connection_1.CdpConnection(session.wsUrl, opts.sessionId);
+            conn.onFrame = (frame) => { onFrameCallback?.(frame); };
+            conn.onDisconnect = (reason) => { onSessionEndCallback?.({ sessionId: opts.sessionId, reason }); };
+            await conn.connect();
+            await conn.startScreencast(opts.width ?? 1280, opts.height ?? 800);
+            cdpConnections.set(opts.sessionId, conn);
+            return { ok: true, wsUrl: session.wsUrl };
+        }
+        catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
+    reg('cdp.navigate', async (...args) => {
+        const opts = args[0];
+        const conn = cdpConnections.get(opts.sessionId);
+        if (conn) {
+            await conn.navigate(opts.url);
+        }
+    });
+    reg('cdp.close', async (...args) => {
+        const opts = args[0];
+        const conn = cdpConnections.get(opts.sessionId);
+        if (conn) {
+            conn.disconnect();
+            cdpConnections.delete(opts.sessionId);
+        }
+        (0, cdp_manager_1.killSession)(opts.sessionId);
+    });
+    reg('cdp.resize', async (...args) => {
+        const opts = args[0];
+        const conn = cdpConnections.get(opts.sessionId);
+        if (conn) {
+            await conn.resize(opts.width, opts.height);
+        }
+    });
+    reg('cdp.inputMouse', async (...args) => {
+        const opts = args[0];
+        const conn = cdpConnections.get(opts.sessionId);
+        if (conn) {
+            await conn.inputMouse(opts);
+        }
+    });
+    reg('cdp.inputKey', async (...args) => {
+        const opts = args[0];
+        const conn = cdpConnections.get(opts.sessionId);
+        if (conn) {
+            await conn.inputKey(opts);
+        }
+    });
+    reg('cdp.inputScroll', async (...args) => {
+        const opts = args[0];
+        const conn = cdpConnections.get(opts.sessionId);
+        if (conn) {
+            await conn.inputScroll(opts);
+        }
+    });
+    reg('cdp.clearData', async (...args) => {
+        const opts = args[0];
+        return { ok: (0, cdp_manager_1.clearBrowserData)(opts.workspaceId) };
+    });
+    reg('cdp.setFrameCallback', (...args) => {
+        const opts = args[0];
+        onFrameCallback = opts.callback;
+    });
+    reg('cdp.setSessionEndCallback', (...args) => {
+        const opts = args[0];
+        onSessionEndCallback = opts.callback;
+    });
+}
 function deactivate() {
+    for (const conn of cdpConnections.values()) {
+        conn.disconnect();
+    }
+    cdpConnections.clear();
+    (0, cdp_manager_1.killAllSessions)();
     console.log('[chromium-engine] deactivated');
 }

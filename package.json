@@ -10,11 +10,15 @@
     "type": "git",
     "url": "https://github.com/agent-grid/agentgrid-chromium-extension"
   },
-  "categories": ["Browser Engines"],
+  "categories": [
+    "Browser Engines"
+  ],
   "engines": {
     "agentgrid": ">=2.8.0"
   },
-  "activationEvents": ["*"],
+  "activationEvents": [
+    "*"
+  ],
   "contributes": {
     "browserEngines": [
       {
@@ -30,11 +34,15 @@
     ]
   },
   "devDependencies": {
-    "typescript": "^5.8.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.8.0"
   },
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
   }
 }
