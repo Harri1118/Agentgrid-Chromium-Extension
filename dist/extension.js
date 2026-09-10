@@ -167,6 +167,18 @@ function registerCdpCommands(context, chromePath) {
         const opts = args[0];
         return { ok: (0, cdp_manager_1.clearBrowserData)(opts.workspaceId) };
     });
+    reg('cdp.openExtensionManager', (...args) => {
+        const opts = args[0];
+        if (!chromePath) {
+            return { ok: false, error: 'Google Chrome is not installed' };
+        }
+        (0, cdp_manager_1.openChromeForExtensions)(chromePath, opts.workspaceId);
+        return { ok: true };
+    });
+    reg('cdp.listExtensions', (...args) => {
+        const opts = args[0];
+        return (0, cdp_manager_1.listInstalledExtensions)(opts.workspaceId);
+    });
     reg('cdp.setFrameCallback', (...args) => {
         const opts = args[0];
         onFrameCallback = opts.callback;

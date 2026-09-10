@@ -126,6 +126,100 @@ export function killAllSessions(): void {
   activeSessions.clear()
 }
 
+export type InstalledExtension = {
+  id: string
+  name: string
+  version: string
+  description: string
+  popupPath: string | null
+  optionsPath: string | null
+  iconPath: string | null
+}
+
+export function openChromeForExtensions(chromePath: string, workspaceId: string): ChildProcess {
+  const userDataDir = buildUserDataDir(workspaceId)
+
+  const args = [
+    `--user-data-dir=${userDataDir}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    'https://chromewebstore.google.com',
+  ]
+
+  const proc = execFile(chromePath, args, { windowsHide: false })
+
+  return proc
+}
+
+export function listInstalledExtensions(workspaceId: string): InstalledExtension[] {
+  const extensionsDir = path.join(
+    os.homedir(), '.agentgrid', 'chrome-profiles', workspaceId, 'Default', 'Extensions'
+  )
+
+  if (!fs.existsSync(extensionsDir)) { return [] }
+
+  const results: InstalledExtension[] = []
+
+  for (const extId of readdirSafe(extensionsDir)) {
+    const extPath = path.join(extensionsDir, extId)
+    const versions = readdirSafe(extPath)
+    const latestVersion = versions[versions.length - 1]
+
+    if (!latestVersion) { continue }
+
+    const manifestPath = path.join(extPath, latestVersion, 'manifest.json')
+
+    if (!fs.existsSync(manifestPath)) { continue }
+
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as {
+        name?: string
+        version?: string
+        description?: string
+        browser_action?: { default_popup?: string }
+        action?: { default_popup?: string; default_icon?: string | Record<string, string> }
+        options_page?: string
+        options_ui?: { page?: string }
+        icons?: Record<string, string>
+      }
+
+      const popup = manifest.action?.default_popup
+        ?? manifest.browser_action?.default_popup
+        ?? null
+
+      const options = manifest.options_ui?.page
+        ?? manifest.options_page
+        ?? null
+
+      const iconMap = manifest.icons ?? {}
+      const iconSizes = Object.keys(iconMap).map(Number).sort((a, b) => b - a)
+      const bestIcon = iconSizes[0] ? iconMap[String(iconSizes[0])] ?? null : null
+
+      results.push({
+        id: extId,
+        name: manifest.name ?? extId,
+        version: manifest.version ?? '0.0.0',
+        description: manifest.description ?? '',
+        popupPath: popup,
+        optionsPath: options,
+        iconPath: bestIcon,
+      })
+    } catch {
+      continue
+    }
+  }
+
+  return results
+}
+
+function readdirSafe(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir).filter((name) => !name.startsWith('.'))
+  } catch {
+    return []
+  }
+}
+
 export function clearBrowserData(workspaceId: string): boolean {
   const profileDir = path.join(os.homedir(), '.agentgrid', 'chrome-profiles', workspaceId)
 

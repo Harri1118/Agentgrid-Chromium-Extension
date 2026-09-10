@@ -10,4 +10,15 @@ export declare function launchChrome(chromePath: string, sessionId: string, work
 export declare function getSession(sessionId: string): CdpSession | undefined;
 export declare function killSession(sessionId: string): void;
 export declare function killAllSessions(): void;
+export type InstalledExtension = {
+    id: string;
+    name: string;
+    version: string;
+    description: string;
+    popupPath: string | null;
+    optionsPath: string | null;
+    iconPath: string | null;
+};
+export declare function openChromeForExtensions(chromePath: string, workspaceId: string): ChildProcess;
+export declare function listInstalledExtensions(workspaceId: string): InstalledExtension[];
 export declare function clearBrowserData(workspaceId: string): boolean;

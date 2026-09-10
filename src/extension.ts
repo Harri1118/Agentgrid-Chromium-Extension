@@ -1,7 +1,10 @@
 import { execFileSync } from 'node:child_process'
 import os from 'node:os'
 import fs from 'node:fs'
-import { launchChrome, killSession, killAllSessions, clearBrowserData, getSession } from './cdp-manager'
+import {
+  launchChrome, killSession, killAllSessions, clearBrowserData, getSession,
+  openChromeForExtensions, listInstalledExtensions,
+} from './cdp-manager'
 import { CdpConnection } from './cdp-connection'
 
 type Disposable = { dispose(): void }
@@ -253,6 +256,24 @@ function registerCdpCommands(context: ExtensionContext, chromePath: string | nul
     const opts = args[0] as CdpClearDataArgs
 
     return { ok: clearBrowserData(opts.workspaceId) }
+  })
+
+  reg('cdp.openExtensionManager', (...args: unknown[]) => {
+    const opts = args[0] as { workspaceId: string }
+
+    if (!chromePath) {
+      return { ok: false, error: 'Google Chrome is not installed' }
+    }
+
+    openChromeForExtensions(chromePath, opts.workspaceId)
+
+    return { ok: true }
+  })
+
+  reg('cdp.listExtensions', (...args: unknown[]) => {
+    const opts = args[0] as { workspaceId: string }
+
+    return listInstalledExtensions(opts.workspaceId)
   })
 
   reg('cdp.setFrameCallback', (...args: unknown[]) => {
