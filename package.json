@@ -1,0 +1,38 @@
+{
+  "name": "agentgrid-chromium",
+  "displayName": "Chromium Browser Engine",
+  "version": "0.1.0",
+  "description": "Adds Chromium as a selectable browser engine for AgentGrid browser panes.",
+  "publisher": "agentgrid",
+  "main": "dist/extension.js",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agent-grid/agentgrid-chromium-extension"
+  },
+  "categories": ["Browser Engines"],
+  "engines": {
+    "agentgrid": ">=2.8.0"
+  },
+  "activationEvents": ["*"],
+  "contributes": {
+    "browserEngines": [
+      {
+        "id": "chromium",
+        "label": "Chromium",
+        "description": "Standalone Chromium browser engine via Playwright"
+      }
+    ]
+  },
+  "dependencies": {
+    "playwright-core": "^1.52.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "@types/node": "^22.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  }
+}
