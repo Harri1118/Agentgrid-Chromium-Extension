@@ -18,9 +18,14 @@
   "contributes": {
     "browserEngines": [
       {
-        "id": "chromium",
-        "label": "Chromium",
-        "description": "Standalone Chromium browser engine via Playwright"
+        "id": "chrome-system",
+        "label": "Google Chrome (System)",
+        "description": "Uses your installed Google Chrome — version detected at startup"
+      },
+      {
+        "id": "chrome-bundled",
+        "label": "Chromium (Bundled)",
+        "description": "Standalone Chromium managed by AgentGrid — independent of your system browser"
       }
     ]
   },
