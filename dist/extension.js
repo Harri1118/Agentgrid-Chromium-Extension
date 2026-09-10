@@ -40,14 +40,16 @@ function getChromeVersion(chromePath) {
         return null;
     }
 }
+const FALLBACK_CHROME_VERSION = '130.0.6723.117';
 function buildChromeUserAgent(version) {
     const platform = node_os_1.default.platform();
+    const v = version || FALLBACK_CHROME_VERSION;
     const osString = platform === 'darwin'
         ? 'Macintosh; Intel Mac OS X 10_15_7'
         : platform === 'win32'
             ? 'Windows NT 10.0; Win64; x64'
             : 'X11; Linux x86_64';
-    return `Mozilla/5.0 (${osString}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version} Safari/537.36`;
+    return `Mozilla/5.0 (${osString}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${v} Safari/537.36`;
 }
 // ── Bundled Chromium via Playwright ─────────────────────────────────
 function getBundledChromiumVersion(extensionRoot) {
@@ -113,7 +115,7 @@ function registerSystemChrome(context) {
 function registerBundledChromium(context, extensionRoot) {
     installBundledChromium(extensionRoot);
     const bundledVersion = getBundledChromiumVersion(extensionRoot);
-    const bundledUA = bundledVersion ? buildChromeUserAgent(bundledVersion) : undefined;
+    const bundledUA = buildChromeUserAgent(bundledVersion ?? undefined);
     const label = bundledVersion ? `Chromium ${bundledVersion} (Bundled)` : 'Chromium (Bundled)';
     console.log(`[chromium-engine] bundled Chromium: ${bundledVersion ?? 'unknown version'}`);
     const registration = __agentgrid_api.browserEngines.registerBrowserEngine({
