@@ -150,7 +150,7 @@ function registerFullChromeEngine(context: ExtensionContext, chromePath: string 
   const registration = __agentgrid_api.browserEngines.registerBrowserEngine({
     id: 'chrome-full',
     label: `Google Chrome${versionLabel}`,
-    description: `Full Google Chrome with extension support, rendered via screen streaming from ${chromePath}`,
+    description: `Full Google Chrome rendering via screen streaming — real Chrome compatibility but cannot install Chrome Web Store extensions`,
   })
 
   context.subscriptions.push(registration)
