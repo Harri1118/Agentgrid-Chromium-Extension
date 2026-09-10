@@ -47,7 +47,7 @@ function launchChrome(chromePath, sessionId, workspaceId, startUrl) {
         });
         let settled = false;
         const tryConnect = (attempt) => {
-            if (attempt > 20) {
+            if (attempt > 40) {
                 if (!settled) {
                     settled = true;
                     proc.kill();
@@ -81,7 +81,7 @@ function launchChrome(chromePath, sessionId, workspaceId, startUrl) {
                 setTimeout(() => tryConnect(attempt + 1), 250);
             });
         };
-        setTimeout(() => tryConnect(0), 300);
+        setTimeout(() => tryConnect(0), 500);
     });
 }
 function getSession(sessionId) {

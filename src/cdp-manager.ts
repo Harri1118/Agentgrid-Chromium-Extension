@@ -63,7 +63,7 @@ export function launchChrome(chromePath: string, sessionId: string, workspaceId:
     let settled = false
 
     const tryConnect = (attempt: number): void => {
-      if (attempt > 20) {
+      if (attempt > 40) {
         if (!settled) {
           settled = true
           proc.kill()
@@ -103,7 +103,7 @@ export function launchChrome(chromePath: string, sessionId: string, workspaceId:
         })
     }
 
-    setTimeout(() => tryConnect(0), 300)
+    setTimeout(() => tryConnect(0), 500)
   })
 }
 
