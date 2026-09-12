@@ -35,8 +35,11 @@
 
   // react-shim:react/jsx-runtime
   var require_jsx_runtime = __commonJS({
-    "react-shim:react/jsx-runtime"(exports, module) {
-      module.exports = globalThis.__agentgrid_react;
+    "react-shim:react/jsx-runtime"(exports) {
+      var React = globalThis.__agentgrid_react;
+      exports.jsx = React.createElement;
+      exports.jsxs = React.createElement;
+      exports.Fragment = React.Fragment;
     }
   });
 
