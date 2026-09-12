@@ -1,11 +1,29 @@
 import { execFileSync } from 'node:child_process'
 import os from 'node:os'
 import fs from 'node:fs'
+import { session } from 'electron'
 import {
-  launchChrome, killSession, killAllSessions, clearBrowserData, getSession,
+  launchChrome, killSession, killAllSessions, clearBrowserData,
   openChromeForExtensions, listInstalledExtensions,
 } from './cdp-manager'
 import { CdpConnection } from './cdp-connection'
+import {
+  installExtension as installChromeExt,
+  uninstallExtension as uninstallChromeExt,
+  toggleExtension as toggleChromeExt,
+  listInstalledChromeExtensions,
+  getEnabledExtensionPaths,
+  updateAllExtensions,
+  updateExtension as updateChromeExt,
+} from './crx-manager'
+import {
+  listProfiles,
+  getActiveProfileId,
+  createProfile,
+  deleteProfile,
+  renameProfile,
+  setActiveProfile,
+} from './profile-manager'
 
 type Disposable = { dispose(): void }
 
@@ -103,6 +121,37 @@ function buildChromeUserAgent(version?: string): string {
 
 const cdpConnections = new Map<string, CdpConnection>()
 
+// Track which partitions have had Chrome extensions loaded
+const loadedPartitions = new Set<string>()
+
+// ── Electron session.loadExtension helpers ──────────────────────────
+
+async function loadExtensionsIntoPartition(partition: string, extPaths: string[]): Promise<number> {
+  const ses = session.fromPartition(partition)
+  let loaded = 0
+
+  for (const extPath of extPaths) {
+    try {
+      await ses.loadExtension(extPath, { allowFileAccess: true })
+      loaded++
+    } catch (err) {
+      console.warn(`[chromium-engine] failed to load extension ${extPath}:`, (err as Error).message)
+    }
+  }
+
+  return loaded
+}
+
+function removeExtensionFromPartition(partition: string, extensionId: string): void {
+  try {
+    const ses = session.fromPartition(partition)
+
+    ses.removeExtension(extensionId)
+  } catch (err) {
+    console.warn(`[chromium-engine] failed to remove extension ${extensionId}:`, (err as Error).message)
+  }
+}
+
 // ── Activate ────────────────────────────────────────────────────────
 
 export async function activate(context: ExtensionContext): Promise<void> {
@@ -114,13 +163,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
   registerLightweightEngine(context, chromeVersion)
   registerFullChromeEngine(context, chromePath, chromeVersion)
   registerCdpCommands(context, chromePath)
+  registerChromeExtCommands(context)
+  registerProfileCommands(context)
 
-  const currentEngine = __agentgrid_api.settings.get('browserEngine')
+  // Auto-update installed Chrome extensions in the background
+  updateAllExtensions().catch((err) => {
+    console.warn('[chromium-engine] background extension update failed:', (err as Error).message)
+  })
 
-  if (!currentEngine || currentEngine === 'built-in') {
-    __agentgrid_api.settings.update('browserEngine', 'chrome-lightweight')
-    console.log('[chromium-engine] auto-activated chrome-lightweight as default engine')
-  }
+  console.log('[chromium-engine] engines registered, user can switch via Settings or context menu')
 }
 
 function registerLightweightEngine(context: ExtensionContext, chromeVersion: string | null): void {
@@ -131,7 +182,7 @@ function registerLightweightEngine(context: ExtensionContext, chromeVersion: str
   const registration = __agentgrid_api.browserEngines.registerBrowserEngine({
     id: 'chrome-lightweight',
     label: 'Chrome (Lightweight)',
-    description: 'Mimics Chrome for site compatibility but does not support Chrome extensions',
+    description: 'Chrome UA with support for Chrome Web Store extensions via Electron',
     userAgent,
   })
 
@@ -152,10 +203,181 @@ function registerFullChromeEngine(context: ExtensionContext, chromePath: string 
   const registration = __agentgrid_api.browserEngines.registerBrowserEngine({
     id: 'chrome-full',
     label: `Google Chrome${versionLabel}`,
-    description: `Full Google Chrome rendering via screen streaming — real Chrome compatibility but cannot install Chrome Web Store extensions`,
+    description: 'Full Google Chrome rendering via screen streaming',
   })
 
   context.subscriptions.push(registration)
+}
+
+// ── Chrome extension management commands ────────────────────────────
+
+function registerChromeExtCommands(context: ExtensionContext): void {
+  const reg = (id: string, handler: (...args: unknown[]) => unknown): void => {
+    context.subscriptions.push(__agentgrid_api.commands.registerCommand(id, handler))
+  }
+
+  reg('chromeExt.install', async (...args: unknown[]) => {
+    const opts = args[0] as { extensionId: string; partition?: string }
+
+    try {
+      const meta = await installChromeExt(opts.extensionId)
+
+      if (opts.partition) {
+        const extPaths = getEnabledExtensionPaths()
+
+        await loadExtensionsIntoPartition(opts.partition, extPaths)
+      }
+
+      return { ok: true, extension: meta }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+
+  reg('chromeExt.uninstall', async (...args: unknown[]) => {
+    const opts = args[0] as { extensionId: string; partition?: string }
+
+    try {
+      uninstallChromeExt(opts.extensionId)
+
+      if (opts.partition) {
+        removeExtensionFromPartition(opts.partition, opts.extensionId)
+      }
+
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+
+  reg('chromeExt.toggle', async (...args: unknown[]) => {
+    const opts = args[0] as { extensionId: string; enabled: boolean }
+
+    try {
+      toggleChromeExt(opts.extensionId, opts.enabled)
+
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+
+  reg('chromeExt.list', () => {
+    return listInstalledChromeExtensions()
+  })
+
+  reg('chromeExt.update', async (...args: unknown[]) => {
+    const opts = args[0] as { extensionId: string }
+
+    try {
+      const result = await updateChromeExt(opts.extensionId)
+
+      return { ok: true, ...result }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+
+  reg('chromeExt.updateAll', async () => {
+    try {
+      await updateAllExtensions()
+
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+
+  reg('chromeExt.loadIntoPartition', async (...args: unknown[]) => {
+    const opts = args[0] as { partition: string }
+
+    if (loadedPartitions.has(opts.partition)) {
+      return { ok: true, alreadyLoaded: true }
+    }
+
+    try {
+      const extPaths = getEnabledExtensionPaths()
+
+      if (extPaths.length === 0) {
+        loadedPartitions.add(opts.partition)
+
+        return { ok: true, loaded: 0 }
+      }
+
+      const loaded = await loadExtensionsIntoPartition(opts.partition, extPaths)
+
+      loadedPartitions.add(opts.partition)
+      console.log(`[chromium-engine] loaded ${loaded} Chrome extension(s) into ${opts.partition}`)
+
+      return { ok: true, loaded }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+}
+
+// ── Browser profile commands ─────────────────────────────────────────
+
+function registerProfileCommands(context: ExtensionContext): void {
+  const reg = (id: string, handler: (...args: unknown[]) => unknown): void => {
+    context.subscriptions.push(__agentgrid_api.commands.registerCommand(id, handler))
+  }
+
+  reg('browserProfile.list', () => {
+    return listProfiles()
+  })
+
+  reg('browserProfile.getActive', () => {
+    return getActiveProfileId()
+  })
+
+  reg('browserProfile.create', (...args: unknown[]) => {
+    const opts = args[0] as { name: string }
+
+    try {
+      const profile = createProfile(opts.name)
+
+      return { ok: true, profile }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+
+  reg('browserProfile.delete', (...args: unknown[]) => {
+    const opts = args[0] as { profileId: string }
+
+    try {
+      deleteProfile(opts.profileId)
+
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+
+  reg('browserProfile.rename', (...args: unknown[]) => {
+    const opts = args[0] as { profileId: string; name: string }
+
+    try {
+      renameProfile(opts.profileId, opts.name)
+
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+
+  reg('browserProfile.setActive', (...args: unknown[]) => {
+    const opts = args[0] as { profileId: string }
+
+    try {
+      setActiveProfile(opts.profileId)
+
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
 }
 
 // ── CDP commands ────────────────────────────────────────────────────
@@ -187,8 +409,8 @@ function registerCdpCommands(context: ExtensionContext, chromePath: string | nul
     }
 
     try {
-      const session = await launchChrome(chromePath, opts.sessionId, opts.workspaceId, opts.url)
-      const conn = new CdpConnection(session.wsUrl, opts.sessionId)
+      const cdpSession = await launchChrome(chromePath, opts.sessionId, opts.workspaceId, opts.url)
+      const conn = new CdpConnection(cdpSession.wsUrl, opts.sessionId)
 
       conn.onFrame = (frame) => { onFrameCallback?.(frame) }
       conn.onDisconnect = (reason) => { onSessionEndCallback?.({ sessionId: opts.sessionId, reason }) }
@@ -198,7 +420,7 @@ function registerCdpCommands(context: ExtensionContext, chromePath: string | nul
 
       cdpConnections.set(opts.sessionId, conn)
 
-      return { ok: true, wsUrl: session.wsUrl }
+      return { ok: true, wsUrl: cdpSession.wsUrl }
     } catch (err) {
       return { ok: false, error: (err as Error).message }
     }
@@ -295,5 +517,6 @@ export function deactivate(): void {
 
   cdpConnections.clear()
   killAllSessions()
+  loadedPartitions.clear()
   console.log('[chromium-engine] deactivated')
 }

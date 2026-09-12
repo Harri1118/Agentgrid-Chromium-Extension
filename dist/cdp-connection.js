@@ -56,14 +56,14 @@ class CdpConnection {
         await this.send('Emulation.setDeviceMetricsOverride', {
             width,
             height,
-            deviceScaleFactor: 2,
+            deviceScaleFactor: 1,
             mobile: false,
         });
         await this.send('Page.startScreencast', {
             format: 'jpeg',
-            quality: 80,
-            maxWidth: width * 2,
-            maxHeight: height * 2,
+            quality: 60,
+            maxWidth: width,
+            maxHeight: height,
             everyNthFrame: 1,
         });
     }
@@ -74,15 +74,15 @@ class CdpConnection {
         await this.send('Emulation.setDeviceMetricsOverride', {
             width,
             height,
-            deviceScaleFactor: 2,
+            deviceScaleFactor: 1,
             mobile: false,
         });
         await this.send('Page.stopScreencast', {});
         await this.send('Page.startScreencast', {
             format: 'jpeg',
-            quality: 80,
-            maxWidth: width * 2,
-            maxHeight: height * 2,
+            quality: 60,
+            maxWidth: width,
+            maxHeight: height,
             everyNthFrame: 1,
         });
     }
@@ -96,6 +96,12 @@ class CdpConnection {
         });
     }
     async inputKey(input) {
+        const keyCode = {
+            Enter: 13, Tab: 9, Backspace: 8, Delete: 46, Escape: 27,
+            ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39,
+            Home: 36, End: 35, PageUp: 33, PageDown: 34,
+        };
+        const specialText = { Enter: '\r', Tab: '\t' };
         const params = { type: input.type };
         if (input.key) {
             params.key = input.key;
@@ -103,11 +109,17 @@ class CdpConnection {
         if (input.code) {
             params.code = input.code;
         }
-        if (input.text) {
-            params.text = input.text;
-        }
         if (input.modifiers !== undefined) {
             params.modifiers = input.modifiers;
+        }
+        const text = input.text ?? specialText[input.key ?? ''];
+        const code = keyCode[input.key ?? ''];
+        if (text) {
+            params.text = text;
+        }
+        if (code) {
+            params.windowsVirtualKeyCode = code;
+            params.nativeVirtualKeyCode = code;
         }
         await this.send('Input.dispatchKeyEvent', params);
     }

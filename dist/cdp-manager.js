@@ -27,7 +27,7 @@ function buildUserDataDir(workspaceId) {
 }
 function launchChrome(chromePath, sessionId, workspaceId, startUrl) {
     const port = allocatePort();
-    const userDataDir = buildUserDataDir(workspaceId);
+    const userDataDir = buildUserDataDir(node_path_1.default.join(workspaceId, sessionId));
     const url = startUrl || 'about:blank';
     const args = [
         '--headless=new',
@@ -41,7 +41,7 @@ function launchChrome(chromePath, sessionId, workspaceId, startUrl) {
         url,
     ];
     return new Promise((resolve, reject) => {
-        const proc = (0, node_child_process_1.execFile)(chromePath, args, { windowsHide: true });
+        const proc = (0, node_child_process_1.spawn)(chromePath, args, { detached: true, stdio: 'ignore', windowsHide: true });
         proc.on('error', (err) => {
             reject(new Error(`Failed to launch Chrome: ${err.message}`));
         });
@@ -87,17 +87,38 @@ function launchChrome(chromePath, sessionId, workspaceId, startUrl) {
 function getSession(sessionId) {
     return activeSessions.get(sessionId);
 }
+function killChromeProcess(proc) {
+    const pid = proc.pid;
+    if (!pid) {
+        proc.kill();
+        return;
+    }
+    try {
+        process.kill(-pid, 'SIGTERM');
+    }
+    catch {
+        proc.kill();
+    }
+}
 function killSession(sessionId) {
     const session = activeSessions.get(sessionId);
     if (!session) {
         return;
     }
-    session.chromeProcess.kill();
+    killChromeProcess(session.chromeProcess);
     activeSessions.delete(sessionId);
+    try {
+        node_fs_1.default.rmSync(session.userDataDir, { recursive: true, force: true });
+    }
+    catch { }
 }
 function killAllSessions() {
     for (const session of activeSessions.values()) {
-        session.chromeProcess.kill();
+        killChromeProcess(session.chromeProcess);
+        try {
+            node_fs_1.default.rmSync(session.userDataDir, { recursive: true, force: true });
+        }
+        catch { }
     }
     activeSessions.clear();
 }

@@ -1,4 +1,4 @@
-import { execFile, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -38,7 +38,7 @@ function buildUserDataDir(workspaceId: string): string {
 
 export function launchChrome(chromePath: string, sessionId: string, workspaceId: string, startUrl?: string): Promise<CdpSession> {
   const port = allocatePort()
-  const userDataDir = buildUserDataDir(workspaceId)
+  const userDataDir = buildUserDataDir(path.join(workspaceId, sessionId))
   const url = startUrl || 'about:blank'
 
   const args = [
@@ -54,7 +54,7 @@ export function launchChrome(chromePath: string, sessionId: string, workspaceId:
   ]
 
   return new Promise((resolve, reject) => {
-    const proc = execFile(chromePath, args, { windowsHide: true })
+    const proc = spawn(chromePath, args, { detached: true, stdio: 'ignore', windowsHide: true })
 
     proc.on('error', (err) => {
       reject(new Error(`Failed to launch Chrome: ${err.message}`))
@@ -111,18 +111,42 @@ export function getSession(sessionId: string): CdpSession | undefined {
   return activeSessions.get(sessionId)
 }
 
+function killChromeProcess(proc: ChildProcess): void {
+  const pid = proc.pid
+
+  if (!pid) {
+    proc.kill()
+
+    return
+  }
+
+  try {
+    process.kill(-pid, 'SIGTERM')
+  } catch {
+    proc.kill()
+  }
+}
+
 export function killSession(sessionId: string): void {
   const session = activeSessions.get(sessionId)
 
   if (!session) { return }
 
-  session.chromeProcess.kill()
+  killChromeProcess(session.chromeProcess)
   activeSessions.delete(sessionId)
+
+  try {
+    fs.rmSync(session.userDataDir, { recursive: true, force: true })
+  } catch {}
 }
 
 export function killAllSessions(): void {
   for (const session of activeSessions.values()) {
-    session.chromeProcess.kill()
+    killChromeProcess(session.chromeProcess)
+
+    try {
+      fs.rmSync(session.userDataDir, { recursive: true, force: true })
+    } catch {}
   }
 
   activeSessions.clear()

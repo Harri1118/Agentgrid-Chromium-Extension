@@ -5,6 +5,7 @@
   "description": "Adds Lightweight (UA spoofing) and full Google Chrome (CDP screencast) browser engines for AgentGrid.",
   "publisher": "agentgrid",
   "main": "dist/extension.js",
+  "renderer": "dist/renderer.js",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -35,10 +36,14 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/react": "^19.3.0",
+    "electron": "^44.3.0",
+    "esbuild": "^0.25.12",
     "typescript": "^5.8.0"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node build-renderer.mjs",
+    "build:renderer": "node build-renderer.mjs",
     "watch": "tsc --watch"
   }
 }
