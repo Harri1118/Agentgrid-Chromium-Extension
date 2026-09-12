@@ -1,10 +1,12 @@
 import { execFileSync } from 'node:child_process'
 import os from 'node:os'
+import path from 'node:path'
 import fs from 'node:fs'
-import { session } from 'electron'
+import { session, BrowserWindow } from 'electron'
 import {
   launchChrome, killSession, killAllSessions, clearBrowserData,
-  openChromeForExtensions, listInstalledExtensions,
+  openChromeForExtensions, openExtensionPopupWindow,
+  listInstalledExtensions, removeInstalledExtension,
 } from './cdp-manager'
 import { CdpConnection } from './cdp-connection'
 import {
@@ -126,6 +128,116 @@ const loadedPartitions = new Set<string>()
 
 // ── Electron session.loadExtension helpers ──────────────────────────
 
+const API_STUBS_FILENAME = 'agentgrid-api-stubs.js'
+
+function findLeafChunk(extPath: string, swContent: string): string | null {
+  const importRe = /from\s*["']([^"']+)["']/g
+  const swDir = path.dirname(extPath)
+  let match: RegExpExecArray | null
+
+  const chunkRefs = new Set<string>()
+  while ((match = importRe.exec(swContent)) !== null) {
+    const ref = match[1]
+    if (ref.includes('chunk-')) chunkRefs.add(ref.replace(/^\.\.\//, '').replace(/^\.\//, ''))
+  }
+
+  let bestLeaf: string | null = null
+  let bestImportCount = 0
+
+  for (const chunkName of chunkRefs) {
+    const chunkPath = path.join(extPath, chunkName)
+    try {
+      const content = fs.readFileSync(chunkPath, 'utf-8')
+      const hasImports = /^import\s/m.test(content)
+      if (!hasImports) {
+        const importedBy = fs.readdirSync(extPath)
+          .filter((f) => f.endsWith('.js') && f !== chunkName)
+          .filter((f) => {
+            try { return fs.readFileSync(path.join(extPath, f), 'utf-8').includes(chunkName) } catch { return false }
+          }).length
+
+        if (importedBy > bestImportCount) {
+          bestImportCount = importedBy
+          bestLeaf = chunkName
+        }
+      }
+    } catch {}
+  }
+
+  return bestLeaf
+}
+
+function patchExtensionWithStubs(extPath: string, pluginDir: string): void {
+  const destStubPath = path.join(extPath, API_STUBS_FILENAME)
+
+  if (fs.existsSync(destStubPath)) { return }
+
+  const srcStubPath = path.join(pluginDir, 'dist', 'chrome-api-stubs.js')
+
+  if (!fs.existsSync(srcStubPath)) { return }
+
+  fs.copyFileSync(srcStubPath, destStubPath)
+
+  const manifestPath = path.join(extPath, 'manifest.json')
+
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
+
+    if (manifest.background?.service_worker) {
+      const swPath = path.join(extPath, manifest.background.service_worker)
+      const swContent = fs.readFileSync(swPath, 'utf-8')
+      const stubMarker = '/* agentgrid-api-stubs */'
+      const isModule = manifest.background.type === 'module'
+
+      if (!swContent.includes(stubMarker)) {
+        const stubContent = fs.readFileSync(destStubPath, 'utf-8')
+
+        if (isModule) {
+          const leafChunk = findLeafChunk(extPath, swContent)
+
+          if (leafChunk) {
+            const leafPath = path.join(extPath, leafChunk)
+            const leafContent = fs.readFileSync(leafPath, 'utf-8')
+
+            if (!leafContent.includes(stubMarker)) {
+              fs.writeFileSync(leafPath, `${stubMarker}\n${stubContent}\n;\n${leafContent}`)
+              console.log(`[chromium-engine] patched ${leafChunk} (leaf chunk) with API stubs`)
+            }
+          }
+
+          const importLines: string[] = []
+          const codeLines: string[] = []
+
+          for (const line of swContent.split('\n')) {
+            if (codeLines.length === 0 && /^import\s/.test(line.trimStart())) {
+              importLines.push(line)
+            } else {
+              codeLines.push(line)
+            }
+          }
+
+          const patched = [...importLines, `${stubMarker}`, stubContent, ';', ...codeLines].join('\n')
+          fs.writeFileSync(swPath, patched)
+          console.log(`[chromium-engine] patched ${manifest.background.service_worker} with API stubs (inlined after imports)`)
+        } else {
+          fs.writeFileSync(swPath, `${stubMarker}\n${stubContent}\n;\n${swContent}`)
+          console.log(`[chromium-engine] patched ${manifest.background.service_worker} with API stubs (inlined)`)
+        }
+      }
+    } else if (manifest.background?.scripts) {
+      const alreadyHasStubs = manifest.background.scripts.includes(API_STUBS_FILENAME)
+
+      if (!alreadyHasStubs) {
+        manifest.background.scripts.unshift(API_STUBS_FILENAME)
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2))
+        console.log('[chromium-engine] patched manifest.json background.scripts with API stubs')
+      }
+    }
+  } catch (err) {
+    console.warn('[chromium-engine] failed to patch extension with stubs:', (err as Error).message)
+  }
+}
+
 async function loadExtensionsIntoPartition(partition: string, extPaths: string[]): Promise<number> {
   const ses = session.fromPartition(partition)
   let loaded = 0
@@ -163,7 +275,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   registerLightweightEngine(context, chromeVersion)
   registerFullChromeEngine(context, chromePath, chromeVersion)
   registerCdpCommands(context, chromePath)
-  registerChromeExtCommands(context)
+  registerChromeExtCommands(context, context.extensionPath)
   registerProfileCommands(context)
 
   // Auto-update installed Chrome extensions in the background
@@ -211,7 +323,7 @@ function registerFullChromeEngine(context: ExtensionContext, chromePath: string 
 
 // ── Chrome extension management commands ────────────────────────────
 
-function registerChromeExtCommands(context: ExtensionContext): void {
+function registerChromeExtCommands(context: ExtensionContext, pluginDir: string): void {
   const reg = (id: string, handler: (...args: unknown[]) => unknown): void => {
     context.subscriptions.push(__agentgrid_api.commands.registerCommand(id, handler))
   }
@@ -221,6 +333,10 @@ function registerChromeExtCommands(context: ExtensionContext): void {
 
     try {
       const meta = await installChromeExt(opts.extensionId)
+
+      if (meta.extensionDir) {
+        patchExtensionWithStubs(meta.extensionDir, pluginDir)
+      }
 
       if (opts.partition) {
         const extPaths = getEnabledExtensionPaths()
@@ -288,6 +404,68 @@ function registerChromeExtCommands(context: ExtensionContext): void {
     }
   })
 
+  reg('chromeExt.resolvePopupUrl', (...args: unknown[]) => {
+    const opts = args[0] as { partition: string; extensionDir: string; popupPath: string }
+
+    try {
+      const ses = session.fromPartition(opts.partition)
+      const loaded = ses.getAllExtensions()
+      const normalizedTarget = opts.extensionDir.replace(/\/+$/, '')
+      const match = loaded.find((ext) => ext.path.replace(/\/+$/, '') === normalizedTarget)
+
+      if (!match) {
+        return { ok: false, error: 'Extension not loaded in this partition' }
+      }
+
+      return { ok: true, url: `chrome-extension://${match.id}/${opts.popupPath}` }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+
+  reg('chromeExt.openPopup', (...args: unknown[]) => {
+    const opts = args[0] as { partition: string; extensionDir: string; popupPath: string; x: number; y: number }
+
+    try {
+      const ses = session.fromPartition(opts.partition)
+      const loaded = ses.getAllExtensions()
+      const normalizedTarget = opts.extensionDir.replace(/\/+$/, '')
+      const match = loaded.find((ext) => ext.path.replace(/\/+$/, '') === normalizedTarget)
+
+      if (!match) {
+        return { ok: false, error: 'Extension not loaded in this partition' }
+      }
+
+      const popupUrl = `chrome-extension://${match.id}/${opts.popupPath}`
+
+      const popup = new BrowserWindow({
+        width: 400,
+        height: 600,
+        x: Math.round(opts.x),
+        y: Math.round(opts.y),
+        frame: false,
+        resizable: true,
+        skipTaskbar: true,
+        alwaysOnTop: true,
+        webPreferences: {
+          session: ses,
+          contextIsolation: true,
+          sandbox: true,
+        },
+      })
+
+      popup.loadURL(popupUrl)
+
+      popup.on('blur', () => {
+        if (!popup.isDestroyed()) { popup.close() }
+      })
+
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+
   reg('chromeExt.loadIntoPartition', async (...args: unknown[]) => {
     const opts = args[0] as { partition: string }
 
@@ -302,6 +480,10 @@ function registerChromeExtCommands(context: ExtensionContext): void {
         loadedPartitions.add(opts.partition)
 
         return { ok: true, loaded: 0 }
+      }
+
+      for (const extPath of extPaths) {
+        patchExtensionWithStubs(extPath, pluginDir)
       }
 
       const loaded = await loadExtensionsIntoPartition(opts.partition, extPaths)
@@ -410,7 +592,7 @@ function registerCdpCommands(context: ExtensionContext, chromePath: string | nul
 
     try {
       const cdpSession = await launchChrome(chromePath, opts.sessionId, opts.workspaceId, opts.url)
-      const conn = new CdpConnection(cdpSession.wsUrl, opts.sessionId)
+      const conn = new CdpConnection(cdpSession.wsUrl, opts.sessionId, cdpSession.debuggingPort)
 
       conn.onFrame = (frame) => { onFrameCallback?.(frame) }
       conn.onDisconnect = (reason) => { onSessionEndCallback?.({ sessionId: opts.sessionId, reason }) }
@@ -473,6 +655,18 @@ function registerCdpCommands(context: ExtensionContext, chromePath: string | nul
     if (conn) { await conn.inputScroll(opts) }
   })
 
+  reg('cdp.openExtensionPopup', (...args: unknown[]) => {
+    const opts = args[0] as { sessionId: string; extensionId: string; popupPath: string }
+
+    if (!chromePath) {
+      return { ok: false, error: 'Google Chrome is not installed' }
+    }
+
+    openExtensionPopupWindow(chromePath, opts.sessionId, opts.extensionId, opts.popupPath)
+
+    return { ok: true }
+  })
+
   reg('cdp.clearData', async (...args: unknown[]) => {
     const opts = args[0] as CdpClearDataArgs
 
@@ -495,6 +689,12 @@ function registerCdpCommands(context: ExtensionContext, chromePath: string | nul
     const opts = args[0] as { workspaceId: string }
 
     return listInstalledExtensions(opts.workspaceId)
+  })
+
+  reg('cdp.removeExtension', (...args: unknown[]) => {
+    const opts = args[0] as { workspaceId: string; extensionId: string }
+
+    return { ok: removeInstalledExtension(opts.workspaceId, opts.extensionId) }
   })
 
   reg('cdp.setFrameCallback', (...args: unknown[]) => {

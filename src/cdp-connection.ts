@@ -1,3 +1,5 @@
+import http from 'node:http'
+
 type CdpResponse = {
   id: number
   result?: Record<string, unknown>
@@ -47,24 +49,79 @@ type ScrollInput = {
   deltaY: number
 }
 
+type DebugTarget = {
+  id: string
+  type: string
+  title: string
+  url: string
+  webSocketDebuggerUrl: string
+}
+
+function fetchJson<T>(url: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    http.get(url, (res) => {
+      let data = ''
+
+      res.on('data', (chunk: string) => { data += chunk })
+
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data) as T)
+        } catch (err) {
+          reject(err)
+        }
+      })
+    }).on('error', reject)
+  })
+}
+
+function httpPut(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url)
+    const options = { hostname: parsed.hostname, port: parsed.port, path: parsed.pathname + parsed.search, method: 'PUT' }
+
+    const req = http.request(options, (res) => {
+      let data = ''
+
+      res.on('data', (chunk: string) => { data += chunk })
+      res.on('end', () => { resolve(data) })
+    })
+
+    req.on('error', reject)
+    req.end()
+  })
+}
+
 export class CdpConnection {
   private ws: WebSocket | null = null
   private nextId = 1
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
   private sessionId: string
   private wsUrl: string
+  private port: number
+  private originalWsUrl: string
+  private popupTargetId: string | null = null
+  private switchingTarget = false
+  private lastWidth = 1280
+  private lastHeight = 800
 
   onFrame: ((frame: ScreencastFrame) => void) | null = null
   onDisconnect: ((reason: string) => void) | null = null
 
-  constructor(wsUrl: string, sessionId: string) {
+  constructor(wsUrl: string, sessionId: string, port: number) {
     this.wsUrl = wsUrl
+    this.originalWsUrl = wsUrl
     this.sessionId = sessionId
+    this.port = port
   }
 
   connect(): Promise<void> {
+    return this.connectTo(this.wsUrl)
+  }
+
+  private connectTo(wsUrl: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.wsUrl)
+      const ws = new WebSocket(wsUrl)
 
       this.ws = ws
 
@@ -95,7 +152,9 @@ export class CdpConnection {
       }
 
       ws.onclose = () => {
-        this.onDisconnect?.('WebSocket closed')
+        if (!this.switchingTarget) {
+          this.onDisconnect?.('WebSocket closed')
+        }
       }
     })
   }
@@ -113,19 +172,33 @@ export class CdpConnection {
     this.pending.clear()
   }
 
+  async minimizeWindow(): Promise<void> {
+    try {
+      const result = await this.send('Browser.getWindowForTarget', {}) as { windowId: number }
+
+      await this.send('Browser.setWindowBounds', {
+        windowId: result.windowId,
+        bounds: { windowState: 'minimized' },
+      })
+    } catch {}
+  }
+
   async startScreencast(width: number, height: number): Promise<void> {
+    this.lastWidth = width
+    this.lastHeight = height
+
     await this.send('Emulation.setDeviceMetricsOverride', {
       width,
       height,
-      deviceScaleFactor: 1,
+      deviceScaleFactor: 2,
       mobile: false,
     })
 
     await this.send('Page.startScreencast', {
       format: 'jpeg',
-      quality: 60,
-      maxWidth: width,
-      maxHeight: height,
+      quality: 92,
+      maxWidth: width * 2,
+      maxHeight: height * 2,
       everyNthFrame: 1,
     })
   }
@@ -135,10 +208,13 @@ export class CdpConnection {
   }
 
   async resize(width: number, height: number): Promise<void> {
+    this.lastWidth = width
+    this.lastHeight = height
+
     await this.send('Emulation.setDeviceMetricsOverride', {
       width,
       height,
-      deviceScaleFactor: 1,
+      deviceScaleFactor: 2,
       mobile: false,
     })
 
@@ -146,11 +222,61 @@ export class CdpConnection {
 
     await this.send('Page.startScreencast', {
       format: 'jpeg',
-      quality: 60,
-      maxWidth: width,
-      maxHeight: height,
+      quality: 92,
+      maxWidth: width * 2,
+      maxHeight: height * 2,
       everyNthFrame: 1,
     })
+  }
+
+  async openExtensionPopup(extensionId: string, popupPath: string): Promise<{ ok: boolean; error?: string }> {
+    const url = `chrome-extension://${extensionId}/${popupPath}`
+
+    try {
+      const raw = await httpPut(`http://127.0.0.1:${this.port}/json/new?${encodeURI(url)}`)
+      const target = JSON.parse(raw) as DebugTarget
+
+      if (!target.webSocketDebuggerUrl) {
+        return { ok: false, error: 'No WebSocket URL for popup target' }
+      }
+
+      this.popupTargetId = target.id
+
+      await this.send('Page.stopScreencast', {}).catch(() => {})
+
+      this.switchingTarget = true
+      this.disconnect()
+      this.switchingTarget = false
+
+      await this.connectTo(target.webSocketDebuggerUrl)
+      await this.startScreencast(this.lastWidth, this.lastHeight)
+
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  }
+
+  async closeExtensionPopup(): Promise<void> {
+    if (!this.popupTargetId) { return }
+
+    try {
+      await this.send('Page.stopScreencast', {}).catch(() => {})
+      await httpPut(`http://127.0.0.1:${this.port}/json/close/${this.popupTargetId}`).catch(() => {})
+    } catch {}
+
+    this.popupTargetId = null
+
+    this.switchingTarget = true
+    this.disconnect()
+    this.switchingTarget = false
+
+    await this.connectTo(this.originalWsUrl)
+    await this.startScreencast(this.lastWidth, this.lastHeight)
+  }
+
+  get hasPopupOpen(): boolean {
+    return this.popupTargetId !== null
   }
 
   async inputMouse(input: MouseInput): Promise<void> {

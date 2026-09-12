@@ -8,7 +8,9 @@ exports.getSession = getSession;
 exports.killSession = killSession;
 exports.killAllSessions = killAllSessions;
 exports.openChromeForExtensions = openChromeForExtensions;
+exports.openExtensionPopupWindow = openExtensionPopupWindow;
 exports.listInstalledExtensions = listInstalledExtensions;
+exports.removeInstalledExtension = removeInstalledExtension;
 exports.clearBrowserData = clearBrowserData;
 const node_child_process_1 = require("node:child_process");
 const node_fs_1 = __importDefault(require("node:fs"));
@@ -133,6 +135,42 @@ function openChromeForExtensions(chromePath, workspaceId) {
     const proc = (0, node_child_process_1.execFile)(chromePath, args, { windowsHide: false });
     return proc;
 }
+function openExtensionPopupWindow(chromePath, sessionId, extensionId, popupPath) {
+    const session = activeSessions.get(sessionId);
+    if (!session) {
+        throw new Error(`No active session: ${sessionId}`);
+    }
+    const extVersionsDir = node_path_1.default.join(session.userDataDir, 'Default', 'Extensions', extensionId);
+    const versions = readdirSafe(extVersionsDir);
+    const latestVersion = versions[versions.length - 1];
+    if (!latestVersion) {
+        throw new Error(`Extension not found: ${extensionId}`);
+    }
+    const extDir = node_path_1.default.join(extVersionsDir, latestVersion);
+    const popupDataDir = buildUserDataDir(`popup-${extensionId}`);
+    const args = [
+        `--user-data-dir=${popupDataDir}`,
+        `--load-extension=${extDir}`,
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-extensions-except=' + extDir,
+        `--app=file://${node_path_1.default.join(extDir, popupPath)}`,
+        '--window-size=400,600',
+    ];
+    console.log('[cdp] opening extension popup:', args.join(' '));
+    const proc = (0, node_child_process_1.spawn)(chromePath, args, {
+        detached: true,
+        stdio: 'pipe',
+    });
+    proc.stderr?.on('data', (data) => {
+        console.log('[cdp-popup-stderr]', data.toString());
+    });
+    proc.on('exit', (code) => {
+        console.log(`[cdp-popup] exited with code ${code}`);
+    });
+    proc.unref();
+    return proc;
+}
 function listInstalledExtensions(workspaceId) {
     const extensionsDir = node_path_1.default.join(node_os_1.default.homedir(), '.agentgrid', 'chrome-profiles', workspaceId, 'Default', 'Extensions');
     if (!node_fs_1.default.existsSync(extensionsDir)) {
@@ -166,6 +204,9 @@ function listInstalledExtensions(workspaceId) {
             const rawDesc = manifest.description ?? '';
             const name = resolveI18n(rawName, versionDir, manifest.default_locale);
             const description = resolveI18n(rawDesc, versionDir, manifest.default_locale);
+            const absoluteIconPath = bestIcon
+                ? iconToDataUri(node_path_1.default.join(versionDir, bestIcon))
+                : null;
             results.push({
                 id: extId,
                 name,
@@ -173,7 +214,7 @@ function listInstalledExtensions(workspaceId) {
                 description,
                 popupPath: popup,
                 optionsPath: options,
-                iconPath: bestIcon,
+                iconPath: absoluteIconPath,
             });
         }
         catch {
@@ -182,12 +223,38 @@ function listInstalledExtensions(workspaceId) {
     }
     return results;
 }
+function removeInstalledExtension(workspaceId, extensionId) {
+    const extensionDir = node_path_1.default.join(node_os_1.default.homedir(), '.agentgrid', 'chrome-profiles', workspaceId, 'Default', 'Extensions', extensionId);
+    if (!node_fs_1.default.existsSync(extensionDir)) {
+        return false;
+    }
+    try {
+        node_fs_1.default.rmSync(extensionDir, { recursive: true, force: true });
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
 function readdirSafe(dir) {
     try {
         return node_fs_1.default.readdirSync(dir).filter((name) => !name.startsWith('.'));
     }
     catch {
         return [];
+    }
+}
+function iconToDataUri(iconPath) {
+    try {
+        const buf = node_fs_1.default.readFileSync(iconPath);
+        const ext = node_path_1.default.extname(iconPath).toLowerCase();
+        const mime = ext === '.svg' ? 'image/svg+xml'
+            : ext === '.webp' ? 'image/webp'
+                : 'image/png';
+        return `data:${mime};base64,${buf.toString('base64')}`;
+    }
+    catch {
+        return null;
     }
 }
 function resolveI18n(raw, versionDir, defaultLocale) {

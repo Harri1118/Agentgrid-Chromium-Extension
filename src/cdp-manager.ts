@@ -177,6 +177,59 @@ export function openChromeForExtensions(chromePath: string, workspaceId: string)
   return proc
 }
 
+export function openExtensionPopupWindow(
+  chromePath: string,
+  sessionId: string,
+  extensionId: string,
+  popupPath: string
+): ChildProcess {
+  const session = activeSessions.get(sessionId)
+
+  if (!session) {
+    throw new Error(`No active session: ${sessionId}`)
+  }
+
+  const extVersionsDir = path.join(session.userDataDir, 'Default', 'Extensions', extensionId)
+  const versions = readdirSafe(extVersionsDir)
+  const latestVersion = versions[versions.length - 1]
+
+  if (!latestVersion) {
+    throw new Error(`Extension not found: ${extensionId}`)
+  }
+
+  const extDir = path.join(extVersionsDir, latestVersion)
+  const popupDataDir = buildUserDataDir(`popup-${extensionId}`)
+
+  const args = [
+    `--user-data-dir=${popupDataDir}`,
+    `--load-extension=${extDir}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-extensions-except=' + extDir,
+    `--app=file://${path.join(extDir, popupPath)}`,
+    '--window-size=400,600',
+  ]
+
+  console.log('[cdp] opening extension popup:', args.join(' '))
+
+  const proc = spawn(chromePath, args, {
+    detached: true,
+    stdio: 'pipe',
+  })
+
+  proc.stderr?.on('data', (data: Buffer) => {
+    console.log('[cdp-popup-stderr]', data.toString())
+  })
+
+  proc.on('exit', (code) => {
+    console.log(`[cdp-popup] exited with code ${code}`)
+  })
+
+  proc.unref()
+
+  return proc
+}
+
 export function listInstalledExtensions(workspaceId: string): InstalledExtension[] {
   const extensionsDir = path.join(
     os.homedir(), '.agentgrid', 'chrome-profiles', workspaceId, 'Default', 'Extensions'
@@ -228,6 +281,10 @@ export function listInstalledExtensions(workspaceId: string): InstalledExtension
       const name = resolveI18n(rawName, versionDir, manifest.default_locale)
       const description = resolveI18n(rawDesc, versionDir, manifest.default_locale)
 
+      const absoluteIconPath = bestIcon
+        ? iconToDataUri(path.join(versionDir, bestIcon))
+        : null
+
       results.push({
         id: extId,
         name,
@@ -235,7 +292,7 @@ export function listInstalledExtensions(workspaceId: string): InstalledExtension
         description,
         popupPath: popup,
         optionsPath: options,
-        iconPath: bestIcon,
+        iconPath: absoluteIconPath,
       })
     } catch {
       continue
@@ -245,11 +302,41 @@ export function listInstalledExtensions(workspaceId: string): InstalledExtension
   return results
 }
 
+export function removeInstalledExtension(workspaceId: string, extensionId: string): boolean {
+  const extensionDir = path.join(
+    os.homedir(), '.agentgrid', 'chrome-profiles', workspaceId, 'Default', 'Extensions', extensionId
+  )
+
+  if (!fs.existsSync(extensionDir)) { return false }
+
+  try {
+    fs.rmSync(extensionDir, { recursive: true, force: true })
+
+    return true
+  } catch {
+    return false
+  }
+}
+
 function readdirSafe(dir: string): string[] {
   try {
     return fs.readdirSync(dir).filter((name) => !name.startsWith('.'))
   } catch {
     return []
+  }
+}
+
+function iconToDataUri(iconPath: string): string | null {
+  try {
+    const buf = fs.readFileSync(iconPath)
+    const ext = path.extname(iconPath).toLowerCase()
+    const mime = ext === '.svg' ? 'image/svg+xml'
+      : ext === '.webp' ? 'image/webp'
+        : 'image/png'
+
+    return `data:${mime};base64,${buf.toString('base64')}`
+  } catch {
+    return null
   }
 }
 

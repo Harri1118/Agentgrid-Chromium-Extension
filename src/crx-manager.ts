@@ -12,6 +12,9 @@ export type ChromeExtensionMeta = {
   description: string
   enabled: boolean
   iconPath: string | null
+  popupPath: string | null
+  iconDataUri: string | null
+  extensionDir: string | null
 }
 
 type Registry = {
@@ -109,7 +112,29 @@ function extractCrx(crxPath: string, destDir: string): void {
   }
 }
 
-function readManifest(extDir: string): { name?: string; version?: string; description?: string; icons?: Record<string, string>; default_locale?: string } | null {
+function iconToDataUri(iconPath: string): string | null {
+  try {
+    const buf = fs.readFileSync(iconPath)
+    const ext = path.extname(iconPath).toLowerCase()
+    const mime = ext === '.svg' ? 'image/svg+xml' : ext === '.webp' ? 'image/webp' : 'image/png'
+
+    return `data:${mime};base64,${buf.toString('base64')}`
+  } catch {
+    return null
+  }
+}
+
+type Manifest = {
+  name?: string
+  version?: string
+  description?: string
+  icons?: Record<string, string>
+  default_locale?: string
+  action?: { default_popup?: string }
+  browser_action?: { default_popup?: string }
+}
+
+function readManifest(extDir: string): Manifest | null {
   const manifestPath = path.join(extDir, 'manifest.json')
 
   if (!fs.existsSync(manifestPath)) { return null }
@@ -187,13 +212,21 @@ export async function installExtension(extensionId: string): Promise<ChromeExten
   const name = resolveI18n(manifest.name ?? extensionId, extDir, manifest.default_locale)
   const description = resolveI18n(manifest.description ?? '', extDir, manifest.default_locale)
 
+  const iconFsPath = bestIcon(manifest.icons, extDir)
+  const popupPath = manifest.action?.default_popup
+    ?? manifest.browser_action?.default_popup
+    ?? null
+
   const meta: ChromeExtensionMeta = {
     id: extensionId,
     name,
     version: manifest.version ?? '0.0.0',
     description,
     enabled: true,
-    iconPath: bestIcon(manifest.icons, extDir),
+    iconPath: iconFsPath,
+    popupPath,
+    iconDataUri: iconFsPath ? iconToDataUri(iconFsPath) : null,
+    extensionDir: extDir,
   }
 
   registry.extensions.push(meta)
@@ -235,7 +268,37 @@ export function toggleExtension(extensionId: string, enabled: boolean): void {
 }
 
 export function listInstalledChromeExtensions(): ChromeExtensionMeta[] {
-  return readRegistry().extensions
+  const registry = readRegistry()
+  let dirty = false
+
+  for (const ext of registry.extensions) {
+    const extDir = path.join(EXTENSIONS_DIR, ext.id)
+
+    if (!ext.extensionDir) {
+      ext.extensionDir = extDir
+      dirty = true
+    }
+
+    if (ext.popupPath !== undefined && ext.iconDataUri !== undefined) { continue }
+
+    const manifest = readManifest(extDir)
+
+    if (!manifest) { continue }
+
+    ext.popupPath = manifest.action?.default_popup ?? manifest.browser_action?.default_popup ?? null
+
+    const iconFsPath = bestIcon(manifest.icons, extDir)
+
+    ext.iconDataUri = iconFsPath ? iconToDataUri(iconFsPath) : null
+
+    if (!ext.iconPath && iconFsPath) { ext.iconPath = iconFsPath }
+
+    dirty = true
+  }
+
+  if (dirty) { writeRegistry(registry) }
+
+  return registry.extensions
 }
 
 export function getExtensionPath(extensionId: string): string | null {
@@ -286,10 +349,15 @@ export async function updateExtension(extensionId: string): Promise<{ updated: b
 
     const name = resolveI18n(manifest.name ?? extensionId, extDir, manifest.default_locale)
 
+    const updatedIconPath = bestIcon(manifest.icons, extDir)
+
     existing.name = name
     existing.version = manifest.version
     existing.description = resolveI18n(manifest.description ?? '', extDir, manifest.default_locale)
-    existing.iconPath = bestIcon(manifest.icons, extDir)
+    existing.iconPath = updatedIconPath
+    existing.popupPath = manifest.action?.default_popup ?? manifest.browser_action?.default_popup ?? null
+    existing.iconDataUri = updatedIconPath ? iconToDataUri(updatedIconPath) : null
+    existing.extensionDir = extDir
     writeRegistry(registry)
 
     console.log(`[crx] updated ${name}: ${oldVersion} → ${manifest.version}`)

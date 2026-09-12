@@ -42,7 +42,7 @@
     "typescript": "^5.8.0"
   },
   "scripts": {
-    "build": "tsc && node build-renderer.mjs",
+    "build": "tsc && cp src/chrome-api-stubs.js dist/ && node build-renderer.mjs",
     "build:renderer": "node build-renderer.mjs",
     "watch": "tsc --watch"
   }

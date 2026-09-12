@@ -1,11 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-
-type ChromeExtMeta = {
-  id: string
-  name: string
-  version: string
-  enabled: boolean
-}
+import { useCallback, useEffect, useState, useRef, type LegacyRef } from 'react'
+import type { ChromeExtMeta } from '../types'
 
 type Props = {
   partition: string
@@ -13,12 +7,22 @@ type Props = {
   onClose?: () => void
 }
 
-type InstallState = 'idle' | 'loading' | 'success' | 'error'
+function ExtToolbarIcon({ ext }: { ext: ChromeExtMeta }) {
+  if (ext.iconDataUri) {
+    return <img src={ext.iconDataUri} alt={ext.name} className="cdp-ext-toolbar-icon-img" />
+  }
+
+  return (
+    <span className="cdp-ext-toolbar-icon-letter">
+      {ext.name.charAt(0).toUpperCase()}
+    </span>
+  )
+}
 
 export default function BrowserExtensionManager({ partition, onNavigate, onClose }: Props) {
   const [extensions, setExtensions] = useState<ChromeExtMeta[]>([])
-  const [installState, setInstallState] = useState<InstallState>('idle')
-  const [installError, setInstallError] = useState('')
+  const [activePopup, setActivePopup] = useState<ChromeExtMeta | null>(null)
+  const popupRef = useRef<HTMLElement | null>(null)
 
   const api = (window as any).electronAPI
 
@@ -42,6 +46,12 @@ export default function BrowserExtensionManager({ partition, onNavigate, onClose
     await refreshExtensions()
   }
 
+  const handleExtClick = (ext: ChromeExtMeta) => {
+    if (!ext.popupPath || !ext.enabled) { return }
+
+    setActivePopup((prev) => prev?.id === ext.id ? null : ext)
+  }
+
   const openWebStore = () => {
     if (onNavigate) {
       onNavigate('https://chromewebstore.google.com')
@@ -51,6 +61,8 @@ export default function BrowserExtensionManager({ partition, onNavigate, onClose
       onClose()
     }
   }
+
+  const enabledExtensions = extensions.filter((ext) => ext.enabled)
 
   return (
     <div className="browser-ext-sidebar" onMouseDown={(e) => e.stopPropagation()}>
@@ -63,16 +75,6 @@ export default function BrowserExtensionManager({ partition, onNavigate, onClose
           </button>
         )}
       </div>
-
-      {installState === 'error' && (
-        <div className="browser-ext-error">{installError}</div>
-      )}
-      {installState === 'success' && (
-        <div className="browser-ext-success">Installed! Reload page to activate.</div>
-      )}
-      {installState === 'loading' && (
-        <div className="browser-ext-loading">Installing extension...</div>
-      )}
 
       <div className="browser-ext-sidebar-list">
         {extensions.length === 0 ? (
@@ -89,7 +91,7 @@ export default function BrowserExtensionManager({ partition, onNavigate, onClose
           extensions.map((ext) => (
             <div key={ext.id} className="browser-ext-card">
               <div className="browser-ext-card-icon">
-                {ext.name.charAt(0).toUpperCase()}
+                <ExtToolbarIcon ext={ext} />
               </div>
               <div className="browser-ext-card-body">
                 <span className="browser-ext-card-name">{ext.name}</span>
@@ -128,6 +130,88 @@ export default function BrowserExtensionManager({ partition, onNavigate, onClose
           Chrome Web Store
         </button>
       </div>
+    </div>
+  )
+}
+
+export function ExtensionToolbar({ partition }: { partition: string }) {
+  const [extensions, setExtensions] = useState<ChromeExtMeta[]>([])
+  const [activePopup, setActivePopup] = useState<ChromeExtMeta | null>(null)
+  const popupAnchorRef = useRef<HTMLButtonElement | null>(null)
+
+  const api = (window as any).electronAPI
+
+  useEffect(() => {
+    void api.chromeExt.list().then((list: ChromeExtMeta[]) => {
+      setExtensions(list.filter((e) => e.enabled))
+    })
+  }, [])
+
+  const handleExtClick = (ext: ChromeExtMeta) => {
+    if (!ext.popupPath) { return }
+
+    setActivePopup((prev) => prev?.id === ext.id ? null : ext)
+  }
+
+  if (extensions.length === 0) { return null }
+
+  return (
+    <div className="cdp-ext-toolbar">
+      <div className="cdp-ext-toolbar-icons">
+        {extensions.map((ext) => (
+          <button
+            key={ext.id}
+            ref={activePopup?.id === ext.id ? popupAnchorRef : undefined}
+            className={`cdp-ext-toolbar-icon${!ext.popupPath ? ' cdp-ext-toolbar-icon-disabled' : ''}${activePopup?.id === ext.id ? ' cdp-ext-toolbar-icon-active' : ''}`}
+            onClick={() => handleExtClick(ext)}
+            title={ext.name}
+          >
+            <ExtToolbarIcon ext={ext} />
+          </button>
+        ))}
+      </div>
+
+      {activePopup && activePopup.popupPath && (
+        <ExtensionPopup
+          extensionId={activePopup.id}
+          popupPath={activePopup.popupPath}
+          partition={partition}
+          onClose={() => setActivePopup(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function ExtensionPopup({ extensionId, popupPath, partition, onClose }: {
+  extensionId: string
+  popupPath: string
+  partition: string
+  onClose: () => void
+}) {
+  const popupUrl = `chrome-extension://${extensionId}/${popupPath}`
+
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+
+      if (!target.closest('.ext-popup-overlay')) {
+        onClose()
+      }
+    }
+
+    document.addEventListener('mousedown', handleClick)
+
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [onClose])
+
+  return (
+    <div className="ext-popup-overlay" onMouseDown={(e) => e.stopPropagation()}>
+      <webview
+        src={popupUrl}
+        partition={partition}
+        style={{ width: '100%', height: '100%', border: 'none' }}
+      />
     </div>
   )
 }

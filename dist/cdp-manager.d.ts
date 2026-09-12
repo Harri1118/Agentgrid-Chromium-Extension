@@ -20,5 +20,7 @@ export type InstalledExtension = {
     iconPath: string | null;
 };
 export declare function openChromeForExtensions(chromePath: string, workspaceId: string): ChildProcess;
+export declare function openExtensionPopupWindow(chromePath: string, sessionId: string, extensionId: string, popupPath: string): ChildProcess;
 export declare function listInstalledExtensions(workspaceId: string): InstalledExtension[];
+export declare function removeInstalledExtension(workspaceId: string, extensionId: string): boolean;
 export declare function clearBrowserData(workspaceId: string): boolean;

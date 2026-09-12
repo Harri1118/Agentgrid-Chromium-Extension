@@ -46,10 +46,16 @@
   // src/renderer/BrowserExtensionManager.tsx
   var import_react = __toESM(require_react());
   var import_jsx_runtime = __toESM(require_jsx_runtime());
+  function ExtToolbarIcon({ ext }) {
+    if (ext.iconDataUri) {
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", { src: ext.iconDataUri, alt: ext.name, className: "cdp-ext-toolbar-icon-img" });
+    }
+    return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "cdp-ext-toolbar-icon-letter", children: ext.name.charAt(0).toUpperCase() });
+  }
   function BrowserExtensionManager({ partition, onNavigate, onClose }) {
     const [extensions, setExtensions] = (0, import_react.useState)([]);
-    const [installState, setInstallState] = (0, import_react.useState)("idle");
-    const [installError, setInstallError] = (0, import_react.useState)("");
+    const [activePopup, setActivePopup] = (0, import_react.useState)(null);
+    const popupRef = (0, import_react.useRef)(null);
     const api = window.electronAPI;
     const refreshExtensions = (0, import_react.useCallback)(async () => {
       const list = await api.chromeExt.list();
@@ -66,6 +72,12 @@
       await api.chromeExt.toggle({ extensionId, enabled });
       await refreshExtensions();
     };
+    const handleExtClick = (ext) => {
+      if (!ext.popupPath || !ext.enabled) {
+        return;
+      }
+      setActivePopup((prev) => prev?.id === ext.id ? null : ext);
+    };
     const openWebStore = () => {
       if (onNavigate) {
         onNavigate("https://chromewebstore.google.com");
@@ -74,15 +86,13 @@
         onClose();
       }
     };
+    const enabledExtensions = extensions.filter((ext) => ext.enabled);
     return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "browser-ext-sidebar", onMouseDown: (e) => e.stopPropagation(), children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "browser-ext-sidebar-header", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "browser-ext-sidebar-title", children: "Extensions" }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "browser-ext-count", children: extensions.length }),
         onClose && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "browser-ext-sidebar-close", onClick: onClose, title: "Close panel", children: "\xD7" })
       ] }),
-      installState === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "browser-ext-error", children: installError }),
-      installState === "success" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "browser-ext-success", children: "Installed! Reload page to activate." }),
-      installState === "loading" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "browser-ext-loading", children: "Installing extension..." }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "browser-ext-sidebar-list", children: extensions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "browser-ext-empty-state", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", { width: "36", height: "36", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round", style: { opacity: 0.25 }, children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M14.5 4h-5V2a2 2 0 0 1 4 0v2z" }),
@@ -92,7 +102,7 @@
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "browser-ext-empty-label", children: "No extensions installed" }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "browser-ext-empty-hint", children: "Browse the Chrome Web Store to find extensions" })
       ] }) : extensions.map((ext) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "browser-ext-card", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "browser-ext-card-icon", children: ext.name.charAt(0).toUpperCase() }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "browser-ext-card-icon", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtToolbarIcon, { ext }) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "browser-ext-card-body", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "browser-ext-card-name", children: ext.name }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "browser-ext-card-version", children: [
@@ -135,6 +145,69 @@
         "Chrome Web Store"
       ] }) })
     ] });
+  }
+  function ExtensionToolbar({ partition }) {
+    const [extensions, setExtensions] = (0, import_react.useState)([]);
+    const [activePopup, setActivePopup] = (0, import_react.useState)(null);
+    const popupAnchorRef = (0, import_react.useRef)(null);
+    const api = window.electronAPI;
+    (0, import_react.useEffect)(() => {
+      void api.chromeExt.list().then((list) => {
+        setExtensions(list.filter((e) => e.enabled));
+      });
+    }, []);
+    const handleExtClick = (ext) => {
+      if (!ext.popupPath) {
+        return;
+      }
+      setActivePopup((prev) => prev?.id === ext.id ? null : ext);
+    };
+    if (extensions.length === 0) {
+      return null;
+    }
+    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "cdp-ext-toolbar", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "cdp-ext-toolbar-icons", children: extensions.map((ext) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        "button",
+        {
+          ref: activePopup?.id === ext.id ? popupAnchorRef : void 0,
+          className: `cdp-ext-toolbar-icon${!ext.popupPath ? " cdp-ext-toolbar-icon-disabled" : ""}${activePopup?.id === ext.id ? " cdp-ext-toolbar-icon-active" : ""}`,
+          onClick: () => handleExtClick(ext),
+          title: ext.name,
+          children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtToolbarIcon, { ext })
+        },
+        ext.id
+      )) }),
+      activePopup && activePopup.popupPath && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        ExtensionPopup,
+        {
+          extensionId: activePopup.id,
+          popupPath: activePopup.popupPath,
+          partition,
+          onClose: () => setActivePopup(null)
+        }
+      )
+    ] });
+  }
+  function ExtensionPopup({ extensionId, popupPath, partition, onClose }) {
+    const popupUrl = `chrome-extension://${extensionId}/${popupPath}`;
+    (0, import_react.useEffect)(() => {
+      const handleClick = (e) => {
+        const target = e.target;
+        if (!target.closest(".ext-popup-overlay")) {
+          onClose();
+        }
+      };
+      document.addEventListener("mousedown", handleClick);
+      return () => document.removeEventListener("mousedown", handleClick);
+    }, [onClose]);
+    return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "ext-popup-overlay", onMouseDown: (e) => e.stopPropagation(), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+      "webview",
+      {
+        src: popupUrl,
+        partition,
+        style: { width: "100%", height: "100%", border: "none" }
+      }
+    ) });
   }
 
   // src/renderer/BrowserProfilePicker.tsx
@@ -318,5 +391,6 @@
   // src/renderer/index.tsx
   var registry = window.__agentgrid_ext_components ??= {};
   registry["browser.extensionManager"] = BrowserExtensionManager;
+  registry["browser.extensionToolbar"] = ExtensionToolbar;
   registry["browser.profilePicker"] = BrowserProfilePicker;
 })();

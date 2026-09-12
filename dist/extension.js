@@ -7,6 +7,7 @@ exports.activate = activate;
 exports.deactivate = deactivate;
 const node_child_process_1 = require("node:child_process");
 const node_os_1 = __importDefault(require("node:os"));
+const node_path_1 = __importDefault(require("node:path"));
 const node_fs_1 = __importDefault(require("node:fs"));
 const electron_1 = require("electron");
 const cdp_manager_1 = require("./cdp-manager");
@@ -60,6 +61,108 @@ const cdpConnections = new Map();
 // Track which partitions have had Chrome extensions loaded
 const loadedPartitions = new Set();
 // ── Electron session.loadExtension helpers ──────────────────────────
+const API_STUBS_FILENAME = 'agentgrid-api-stubs.js';
+function findLeafChunk(extPath, swContent) {
+    const importRe = /from\s*["']([^"']+)["']/g;
+    const swDir = node_path_1.default.dirname(extPath);
+    let match;
+    const chunkRefs = new Set();
+    while ((match = importRe.exec(swContent)) !== null) {
+        const ref = match[1];
+        if (ref.includes('chunk-'))
+            chunkRefs.add(ref.replace(/^\.\.\//, '').replace(/^\.\//, ''));
+    }
+    let bestLeaf = null;
+    let bestImportCount = 0;
+    for (const chunkName of chunkRefs) {
+        const chunkPath = node_path_1.default.join(extPath, chunkName);
+        try {
+            const content = node_fs_1.default.readFileSync(chunkPath, 'utf-8');
+            const hasImports = /^import\s/m.test(content);
+            if (!hasImports) {
+                const importedBy = node_fs_1.default.readdirSync(extPath)
+                    .filter((f) => f.endsWith('.js') && f !== chunkName)
+                    .filter((f) => {
+                    try {
+                        return node_fs_1.default.readFileSync(node_path_1.default.join(extPath, f), 'utf-8').includes(chunkName);
+                    }
+                    catch {
+                        return false;
+                    }
+                }).length;
+                if (importedBy > bestImportCount) {
+                    bestImportCount = importedBy;
+                    bestLeaf = chunkName;
+                }
+            }
+        }
+        catch { }
+    }
+    return bestLeaf;
+}
+function patchExtensionWithStubs(extPath, pluginDir) {
+    const destStubPath = node_path_1.default.join(extPath, API_STUBS_FILENAME);
+    if (node_fs_1.default.existsSync(destStubPath)) {
+        return;
+    }
+    const srcStubPath = node_path_1.default.join(pluginDir, 'dist', 'chrome-api-stubs.js');
+    if (!node_fs_1.default.existsSync(srcStubPath)) {
+        return;
+    }
+    node_fs_1.default.copyFileSync(srcStubPath, destStubPath);
+    const manifestPath = node_path_1.default.join(extPath, 'manifest.json');
+    try {
+        const manifest = JSON.parse(node_fs_1.default.readFileSync(manifestPath, 'utf-8'));
+        if (manifest.background?.service_worker) {
+            const swPath = node_path_1.default.join(extPath, manifest.background.service_worker);
+            const swContent = node_fs_1.default.readFileSync(swPath, 'utf-8');
+            const stubMarker = '/* agentgrid-api-stubs */';
+            const isModule = manifest.background.type === 'module';
+            if (!swContent.includes(stubMarker)) {
+                const stubContent = node_fs_1.default.readFileSync(destStubPath, 'utf-8');
+                if (isModule) {
+                    const leafChunk = findLeafChunk(extPath, swContent);
+                    if (leafChunk) {
+                        const leafPath = node_path_1.default.join(extPath, leafChunk);
+                        const leafContent = node_fs_1.default.readFileSync(leafPath, 'utf-8');
+                        if (!leafContent.includes(stubMarker)) {
+                            node_fs_1.default.writeFileSync(leafPath, `${stubMarker}\n${stubContent}\n;\n${leafContent}`);
+                            console.log(`[chromium-engine] patched ${leafChunk} (leaf chunk) with API stubs`);
+                        }
+                    }
+                    const importLines = [];
+                    const codeLines = [];
+                    for (const line of swContent.split('\n')) {
+                        if (codeLines.length === 0 && /^import\s/.test(line.trimStart())) {
+                            importLines.push(line);
+                        }
+                        else {
+                            codeLines.push(line);
+                        }
+                    }
+                    const patched = [...importLines, `${stubMarker}`, stubContent, ';', ...codeLines].join('\n');
+                    node_fs_1.default.writeFileSync(swPath, patched);
+                    console.log(`[chromium-engine] patched ${manifest.background.service_worker} with API stubs (inlined after imports)`);
+                }
+                else {
+                    node_fs_1.default.writeFileSync(swPath, `${stubMarker}\n${stubContent}\n;\n${swContent}`);
+                    console.log(`[chromium-engine] patched ${manifest.background.service_worker} with API stubs (inlined)`);
+                }
+            }
+        }
+        else if (manifest.background?.scripts) {
+            const alreadyHasStubs = manifest.background.scripts.includes(API_STUBS_FILENAME);
+            if (!alreadyHasStubs) {
+                manifest.background.scripts.unshift(API_STUBS_FILENAME);
+                node_fs_1.default.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+                console.log('[chromium-engine] patched manifest.json background.scripts with API stubs');
+            }
+        }
+    }
+    catch (err) {
+        console.warn('[chromium-engine] failed to patch extension with stubs:', err.message);
+    }
+}
 async function loadExtensionsIntoPartition(partition, extPaths) {
     const ses = electron_1.session.fromPartition(partition);
     let loaded = 0;
@@ -91,7 +194,7 @@ async function activate(context) {
     registerLightweightEngine(context, chromeVersion);
     registerFullChromeEngine(context, chromePath, chromeVersion);
     registerCdpCommands(context, chromePath);
-    registerChromeExtCommands(context);
+    registerChromeExtCommands(context, context.extensionPath);
     registerProfileCommands(context);
     // Auto-update installed Chrome extensions in the background
     (0, crx_manager_1.updateAllExtensions)().catch((err) => {
@@ -125,7 +228,7 @@ function registerFullChromeEngine(context, chromePath, chromeVersion) {
     context.subscriptions.push(registration);
 }
 // ── Chrome extension management commands ────────────────────────────
-function registerChromeExtCommands(context) {
+function registerChromeExtCommands(context, pluginDir) {
     const reg = (id, handler) => {
         context.subscriptions.push(__agentgrid_api.commands.registerCommand(id, handler));
     };
@@ -133,6 +236,9 @@ function registerChromeExtCommands(context) {
         const opts = args[0];
         try {
             const meta = await (0, crx_manager_1.installExtension)(opts.extensionId);
+            if (meta.extensionDir) {
+                patchExtensionWithStubs(meta.extensionDir, pluginDir);
+            }
             if (opts.partition) {
                 const extPaths = (0, crx_manager_1.getEnabledExtensionPaths)();
                 await loadExtensionsIntoPartition(opts.partition, extPaths);
@@ -188,6 +294,60 @@ function registerChromeExtCommands(context) {
             return { ok: false, error: err.message };
         }
     });
+    reg('chromeExt.resolvePopupUrl', (...args) => {
+        const opts = args[0];
+        try {
+            const ses = electron_1.session.fromPartition(opts.partition);
+            const loaded = ses.getAllExtensions();
+            const normalizedTarget = opts.extensionDir.replace(/\/+$/, '');
+            const match = loaded.find((ext) => ext.path.replace(/\/+$/, '') === normalizedTarget);
+            if (!match) {
+                return { ok: false, error: 'Extension not loaded in this partition' };
+            }
+            return { ok: true, url: `chrome-extension://${match.id}/${opts.popupPath}` };
+        }
+        catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
+    reg('chromeExt.openPopup', (...args) => {
+        const opts = args[0];
+        try {
+            const ses = electron_1.session.fromPartition(opts.partition);
+            const loaded = ses.getAllExtensions();
+            const normalizedTarget = opts.extensionDir.replace(/\/+$/, '');
+            const match = loaded.find((ext) => ext.path.replace(/\/+$/, '') === normalizedTarget);
+            if (!match) {
+                return { ok: false, error: 'Extension not loaded in this partition' };
+            }
+            const popupUrl = `chrome-extension://${match.id}/${opts.popupPath}`;
+            const popup = new electron_1.BrowserWindow({
+                width: 400,
+                height: 600,
+                x: Math.round(opts.x),
+                y: Math.round(opts.y),
+                frame: false,
+                resizable: true,
+                skipTaskbar: true,
+                alwaysOnTop: true,
+                webPreferences: {
+                    session: ses,
+                    contextIsolation: true,
+                    sandbox: true,
+                },
+            });
+            popup.loadURL(popupUrl);
+            popup.on('blur', () => {
+                if (!popup.isDestroyed()) {
+                    popup.close();
+                }
+            });
+            return { ok: true };
+        }
+        catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
     reg('chromeExt.loadIntoPartition', async (...args) => {
         const opts = args[0];
         if (loadedPartitions.has(opts.partition)) {
@@ -198,6 +358,9 @@ function registerChromeExtCommands(context) {
             if (extPaths.length === 0) {
                 loadedPartitions.add(opts.partition);
                 return { ok: true, loaded: 0 };
+            }
+            for (const extPath of extPaths) {
+                patchExtensionWithStubs(extPath, pluginDir);
             }
             const loaded = await loadExtensionsIntoPartition(opts.partition, extPaths);
             loadedPartitions.add(opts.partition);
@@ -274,7 +437,7 @@ function registerCdpCommands(context, chromePath) {
         }
         try {
             const cdpSession = await (0, cdp_manager_1.launchChrome)(chromePath, opts.sessionId, opts.workspaceId, opts.url);
-            const conn = new cdp_connection_1.CdpConnection(cdpSession.wsUrl, opts.sessionId);
+            const conn = new cdp_connection_1.CdpConnection(cdpSession.wsUrl, opts.sessionId, cdpSession.debuggingPort);
             conn.onFrame = (frame) => { onFrameCallback?.(frame); };
             conn.onDisconnect = (reason) => { onSessionEndCallback?.({ sessionId: opts.sessionId, reason }); };
             await conn.connect();
@@ -330,6 +493,14 @@ function registerCdpCommands(context, chromePath) {
             await conn.inputScroll(opts);
         }
     });
+    reg('cdp.openExtensionPopup', (...args) => {
+        const opts = args[0];
+        if (!chromePath) {
+            return { ok: false, error: 'Google Chrome is not installed' };
+        }
+        (0, cdp_manager_1.openExtensionPopupWindow)(chromePath, opts.sessionId, opts.extensionId, opts.popupPath);
+        return { ok: true };
+    });
     reg('cdp.clearData', async (...args) => {
         const opts = args[0];
         return { ok: (0, cdp_manager_1.clearBrowserData)(opts.workspaceId) };
@@ -345,6 +516,10 @@ function registerCdpCommands(context, chromePath) {
     reg('cdp.listExtensions', (...args) => {
         const opts = args[0];
         return (0, cdp_manager_1.listInstalledExtensions)(opts.workspaceId);
+    });
+    reg('cdp.removeExtension', (...args) => {
+        const opts = args[0];
+        return { ok: (0, cdp_manager_1.removeInstalledExtension)(opts.workspaceId, opts.extensionId) };
     });
     reg('cdp.setFrameCallback', (...args) => {
         const opts = args[0];

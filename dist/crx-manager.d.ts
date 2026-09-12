@@ -5,6 +5,9 @@ export type ChromeExtensionMeta = {
     description: string;
     enabled: boolean;
     iconPath: string | null;
+    popupPath: string | null;
+    iconDataUri: string | null;
+    extensionDir: string | null;
 };
 export declare function installExtension(extensionId: string): Promise<ChromeExtensionMeta>;
 export declare function uninstallExtension(extensionId: string): void;
