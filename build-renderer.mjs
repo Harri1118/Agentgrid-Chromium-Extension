@@ -22,6 +22,15 @@ const reactShim = {
       `,
       loader: 'js',
     }))
+
+    b.onLoad({ filter: /^react\/jsx-dev-runtime$/, namespace: 'react-shim' }, () => ({
+      contents: `
+        var React = globalThis.__agentgrid_react;
+        exports.jsxDEV = React.createElement;
+        exports.Fragment = React.Fragment;
+      `,
+      loader: 'js',
+    }))
   },
 }
 
@@ -31,6 +40,8 @@ await build({
   format: 'iife',
   outfile: 'dist/renderer.js',
   plugins: [reactShim],
+  jsx: 'automatic',
+  jsxImportSource: 'react',
   target: 'es2022',
   minify: false,
 })
