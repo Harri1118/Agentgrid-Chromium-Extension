@@ -41,9 +41,9 @@ function writeRegistry(registry: Registry): void {
 }
 
 function buildCrxUrl(extensionId: string): string {
-  const prodVersion = '130.0.6723.117'
+  const prodVersion = '137.0.7151.69'
 
-  return `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=${prodVersion}&x=id%3D${extensionId}%26installsource%3Dondemand%26uc`
+  return `https://clients2.google.com/service/update2/crx?response=redirect&acceptformat=crx2,crx3&prodversion=${prodVersion}&x=id%3D${extensionId}%26installsource%3Dondemand%26uc`
 }
 
 function downloadFile(url: string, dest: string): Promise<void> {

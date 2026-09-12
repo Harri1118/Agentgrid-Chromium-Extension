@@ -9,14 +9,14 @@ type ChromeExtMeta = {
 
 type Props = {
   partition: string
+  onNavigate?: (url: string) => void
 }
 
 type InstallState = 'idle' | 'loading' | 'success' | 'error'
 
-export default function BrowserExtensionManager({ partition }: Props) {
+export default function BrowserExtensionManager({ partition, onNavigate }: Props) {
   const [open, setOpen] = useState(false)
   const [extensions, setExtensions] = useState<ChromeExtMeta[]>([])
-  const [installInput, setInstallInput] = useState('')
   const [installState, setInstallState] = useState<InstallState>('idle')
   const [installError, setInstallError] = useState('')
   const panelRef = useRef<HTMLDivElement>(null)
@@ -49,30 +49,7 @@ export default function BrowserExtensionManager({ partition }: Props) {
     return () => document.removeEventListener('mousedown', onClickOutside)
   }, [open])
 
-  const extractExtensionId = (input: string): string | null => {
-    const trimmed = input.trim()
-
-    const urlMatch = /(?:chrome\.google\.com\/webstore|chromewebstore\.google\.com)\/detail\/[^/]*\/([a-z]{32})/.exec(trimmed)
-
-    if (urlMatch) { return urlMatch[1] ?? null }
-
-    const idMatch = /^[a-z]{32}$/.exec(trimmed)
-
-    if (idMatch) { return idMatch[0] }
-
-    return null
-  }
-
-  const handleInstall = async () => {
-    const extensionId = extractExtensionId(installInput)
-
-    if (!extensionId) {
-      setInstallState('error')
-      setInstallError('Enter a valid extension ID or Chrome Web Store URL')
-
-      return
-    }
-
+  const handleInstallById = async (extensionId: string) => {
     setInstallState('loading')
     setInstallError('')
 
@@ -86,7 +63,6 @@ export default function BrowserExtensionManager({ partition }: Props) {
     }
 
     setInstallState('success')
-    setInstallInput('')
     await refreshExtensions()
 
     setTimeout(() => setInstallState('idle'), 2000)
@@ -102,6 +78,13 @@ export default function BrowserExtensionManager({ partition }: Props) {
     await refreshExtensions()
   }
 
+  const openWebStore = () => {
+    if (onNavigate) {
+      onNavigate('https://chromewebstore.google.com')
+      setOpen(false)
+    }
+  }
+
   return (
     <div ref={panelRef} className="browser-ext-manager" onMouseDown={(e) => e.stopPropagation()}>
       <button
@@ -110,31 +93,19 @@ export default function BrowserExtensionManager({ partition }: Props) {
         title="Extensions"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
-          <path d="M10 10.5a2.5 2.5 0 0 1 5 0V12h-5v-1.5z" />
-          <circle cx="12.5" cy="16" r="2.5" />
+          <path d="M14.5 4h-5V2a2 2 0 0 1 4 0v2z" />
+          <rect x="3" y="4" width="18" height="18" rx="2" />
+          <path d="M3 10h18" />
+          <rect x="7" y="14" width="4" height="4" rx="1" />
+          <rect x="13" y="14" width="4" height="4" rx="1" />
         </svg>
       </button>
 
       {open && (
         <div className="browser-ext-panel">
-          <div className="browser-ext-panel-header">Extensions</div>
-
-          <div className="browser-ext-install-row">
-            <input
-              className="browser-ext-install-input"
-              placeholder="Extension ID or Web Store URL"
-              value={installInput}
-              onChange={(e) => { setInstallInput(e.target.value); setInstallState('idle') }}
-              onKeyDown={(e) => { if (e.key === 'Enter') { void handleInstall() } }}
-            />
-            <button
-              className="browser-ext-install-btn"
-              onClick={() => void handleInstall()}
-              disabled={installState === 'loading'}
-            >
-              {installState === 'loading' ? '...' : 'Install'}
-            </button>
+          <div className="browser-ext-panel-header">
+            <span>Extensions</span>
+            <span className="browser-ext-count">{extensions.length}</span>
           </div>
 
           {installState === 'error' && (
@@ -143,39 +114,63 @@ export default function BrowserExtensionManager({ partition }: Props) {
           {installState === 'success' && (
             <div className="browser-ext-success">Installed! Reload page to activate.</div>
           )}
+          {installState === 'loading' && (
+            <div className="browser-ext-loading">Installing extension...</div>
+          )}
 
           <div className="browser-ext-list">
-            {extensions.length === 0 && (
-              <div className="browser-ext-empty">No extensions installed</div>
-            )}
-            {extensions.map((ext) => (
-              <div key={ext.id} className="browser-ext-item">
-                <div className="browser-ext-item-info">
-                  <span className="browser-ext-item-name">{ext.name}</span>
-                  <span className="browser-ext-item-version">v{ext.version}</span>
-                </div>
-                <div className="browser-ext-item-actions">
-                  <button
-                    className={`browser-ext-toggle ${ext.enabled ? 'enabled' : ''}`}
-                    onClick={() => void handleToggle(ext.id, !ext.enabled)}
-                    title={ext.enabled ? 'Disable' : 'Enable'}
-                  >
-                    {ext.enabled ? 'On' : 'Off'}
-                  </button>
-                  <button
-                    className="browser-ext-remove"
-                    onClick={() => void handleUninstall(ext.id)}
-                    title="Uninstall"
-                  >
-                    &times;
-                  </button>
-                </div>
+            {extensions.length === 0 ? (
+              <div className="browser-ext-empty-state">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.3 }}>
+                  <path d="M14.5 4h-5V2a2 2 0 0 1 4 0v2z" />
+                  <rect x="3" y="4" width="18" height="18" rx="2" />
+                  <path d="M3 10h18" />
+                </svg>
+                <span>No extensions installed</span>
+                <span className="browser-ext-empty-hint">Browse the Chrome Web Store to find extensions</span>
               </div>
-            ))}
+            ) : (
+              extensions.map((ext) => (
+                <div key={ext.id} className="browser-ext-card">
+                  <div className="browser-ext-card-icon">
+                    {ext.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="browser-ext-card-body">
+                    <span className="browser-ext-card-name">{ext.name}</span>
+                    <span className="browser-ext-card-version">v{ext.version}</span>
+                  </div>
+                  <div className="browser-ext-card-actions">
+                    <label className="browser-ext-switch" title={ext.enabled ? 'Disable' : 'Enable'}>
+                      <input
+                        type="checkbox"
+                        checked={ext.enabled}
+                        onChange={() => void handleToggle(ext.id, !ext.enabled)}
+                      />
+                      <span className="browser-ext-switch-slider" />
+                    </label>
+                    <button
+                      className="browser-ext-remove-btn"
+                      onClick={() => void handleUninstall(ext.id)}
+                      title="Remove"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
 
-          <div className="browser-ext-tip">
-            Tip: Browse chrome.google.com/webstore, copy the extension URL, and paste above.
+          <div className="browser-ext-footer">
+            <button className="browser-ext-webstore-btn" onClick={openWebStore}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26" fill="currentColor" stroke="none" />
+              </svg>
+              Chrome Web Store
+            </button>
           </div>
         </div>
       )}
