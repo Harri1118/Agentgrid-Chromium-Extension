@@ -3,8 +3,8 @@ import { build } from 'esbuild'
 const reactShim = {
   name: 'react-shim',
   setup(b) {
-    b.onResolve({ filter: /^react$/ }, () => ({
-      path: 'react',
+    b.onResolve({ filter: /^react(\/.*)?$/ }, (args) => ({
+      path: args.path,
       namespace: 'react-shim',
     }))
 
@@ -21,6 +21,7 @@ await build({
   format: 'iife',
   outfile: 'dist/renderer.js',
   plugins: [reactShim],
+  jsx: 'transform',
   target: 'es2022',
   minify: false,
 })
