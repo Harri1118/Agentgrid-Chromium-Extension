@@ -16,8 +16,12 @@ const reactShim = {
     b.onLoad({ filter: /^react\/jsx-runtime$/, namespace: 'react-shim' }, () => ({
       contents: `
         var React = globalThis.__agentgrid_react;
-        exports.jsx = React.createElement;
-        exports.jsxs = React.createElement;
+        function jsx(type, props, key) {
+          if (key !== undefined) { props = Object.assign({}, props, { key: key }); }
+          return React.createElement(type, props);
+        }
+        exports.jsx = jsx;
+        exports.jsxs = jsx;
         exports.Fragment = React.Fragment;
       `,
       loader: 'js',
@@ -26,7 +30,11 @@ const reactShim = {
     b.onLoad({ filter: /^react\/jsx-dev-runtime$/, namespace: 'react-shim' }, () => ({
       contents: `
         var React = globalThis.__agentgrid_react;
-        exports.jsxDEV = React.createElement;
+        function jsxDEV(type, props, key) {
+          if (key !== undefined) { props = Object.assign({}, props, { key: key }); }
+          return React.createElement(type, props);
+        }
+        exports.jsxDEV = jsxDEV;
         exports.Fragment = React.Fragment;
       `,
       loader: 'js',

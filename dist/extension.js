@@ -302,11 +302,58 @@ function registerChromeExtCommands(context, pluginDir) {
             const normalizedTarget = opts.extensionDir.replace(/\/+$/, '');
             const match = loaded.find((ext) => ext.path.replace(/\/+$/, '') === normalizedTarget);
             if (!match) {
+                console.log('[ext-popup] no match for', normalizedTarget);
                 return { ok: false, error: 'Extension not loaded in this partition' };
             }
-            return { ok: true, url: `chrome-extension://${match.id}/${opts.popupPath}` };
+            const popupFile = node_path_1.default.join(match.path, opts.popupPath);
+            if (!node_fs_1.default.existsSync(popupFile)) {
+                console.log('[ext-popup] popup file missing:', popupFile);
+                return { ok: false, error: `Popup file not found: ${popupFile}` };
+            }
+            const preloadSrc = node_path_1.default.join(pluginDir, 'dist', 'popup-preload.js');
+            const preloadDst = node_path_1.default.join(match.path, 'agentgrid-popup-preload.js');
+            console.log('[ext-popup] preloadSrc:', preloadSrc, 'exists:', node_fs_1.default.existsSync(preloadSrc));
+            try {
+                const content = node_fs_1.default.readFileSync(preloadSrc, 'utf8');
+                node_fs_1.default.writeFileSync(preloadDst, content.replace('__EXTENSION_ID__', match.id));
+                console.log('[ext-popup] wrote preload to:', preloadDst);
+            }
+            catch (e) {
+                console.log('[ext-popup] preload write failed:', e.message);
+            }
+            const popupPartition = `ext-popup-${match.id}`;
+            const popupSes = electron_1.session.fromPartition(popupPartition);
+            const extDir = match.path;
+            try {
+                popupSes.protocol.handle('file', (request) => {
+                    const url = new URL(request.url);
+                    const requestPath = decodeURIComponent(url.pathname);
+                    if (!requestPath.startsWith(extDir)) {
+                        const localPath = node_path_1.default.join(extDir, requestPath);
+                        if (node_fs_1.default.existsSync(localPath)) {
+                            console.log('[ext-popup] rewrite', requestPath, '→', localPath);
+                            return electron_1.net.fetch(`file://${localPath}`);
+                        }
+                    }
+                    return electron_1.net.fetch(request);
+                });
+                console.log('[ext-popup] registered file: interceptor for partition', popupPartition);
+            }
+            catch {
+                console.log('[ext-popup] file: interceptor already registered for', popupPartition);
+            }
+            const result = {
+                ok: true,
+                url: `file://${popupFile}`,
+                preload: `file://${preloadDst}`,
+                partition: popupPartition,
+                extensionId: match.id,
+            };
+            console.log('[ext-popup] resolvePopupUrl result:', JSON.stringify(result));
+            return result;
         }
         catch (err) {
+            console.log('[ext-popup] resolvePopupUrl error:', err.message);
             return { ok: false, error: err.message };
         }
     });
@@ -321,6 +368,7 @@ function registerChromeExtCommands(context, pluginDir) {
                 return { ok: false, error: 'Extension not loaded in this partition' };
             }
             const popupUrl = `chrome-extension://${match.id}/${opts.popupPath}`;
+            let userClosed = false;
             const popup = new electron_1.BrowserWindow({
                 width: 400,
                 height: 600,
@@ -330,18 +378,37 @@ function registerChromeExtCommands(context, pluginDir) {
                 resizable: true,
                 skipTaskbar: true,
                 alwaysOnTop: true,
+                show: false,
+                closable: false,
                 webPreferences: {
                     session: ses,
                     contextIsolation: true,
                     sandbox: true,
                 },
             });
-            popup.loadURL(popupUrl);
-            popup.on('blur', () => {
-                if (!popup.isDestroyed()) {
-                    popup.close();
+            popup.webContents.on('did-finish-load', () => {
+                if (popup.isDestroyed()) {
+                    return;
                 }
+                popup.show();
+                setTimeout(() => {
+                    if (popup.isDestroyed()) {
+                        return;
+                    }
+                    popup.setClosable(true);
+                    popup.on('blur', () => {
+                        userClosed = true;
+                        if (!popup.isDestroyed()) {
+                            popup.close();
+                        }
+                    });
+                }, 1000);
             });
+            popup.webContents.on('console-message', (_e, level, msg) => {
+                const tag = ['LOG', 'WARN', 'ERR'][level] || 'LOG';
+                console.log(`[ext-popup:${tag}] ${msg}`);
+            });
+            popup.loadURL(popupUrl);
             return { ok: true };
         }
         catch (err) {

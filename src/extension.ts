@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
-import { session, BrowserWindow } from 'electron'
+import { session, BrowserWindow, net } from 'electron'
 import {
   launchChrome, killSession, killAllSessions, clearBrowserData,
   openChromeForExtensions, openExtensionPopupWindow,
@@ -414,11 +414,70 @@ function registerChromeExtCommands(context: ExtensionContext, pluginDir: string)
       const match = loaded.find((ext) => ext.path.replace(/\/+$/, '') === normalizedTarget)
 
       if (!match) {
+        console.log('[ext-popup] no match for', normalizedTarget)
         return { ok: false, error: 'Extension not loaded in this partition' }
       }
 
-      return { ok: true, url: `chrome-extension://${match.id}/${opts.popupPath}` }
+      const popupFile = path.join(match.path, opts.popupPath)
+
+      if (!fs.existsSync(popupFile)) {
+        console.log('[ext-popup] popup file missing:', popupFile)
+        return { ok: false, error: `Popup file not found: ${popupFile}` }
+      }
+
+      const preloadSrc = path.join(pluginDir, 'dist', 'popup-preload.js')
+      const preloadDst = path.join(match.path, 'agentgrid-popup-preload.js')
+
+      console.log('[ext-popup] preloadSrc:', preloadSrc, 'exists:', fs.existsSync(preloadSrc))
+
+      try {
+        const content = fs.readFileSync(preloadSrc, 'utf8')
+
+        fs.writeFileSync(preloadDst, content.replace('__EXTENSION_ID__', match.id))
+        console.log('[ext-popup] wrote preload to:', preloadDst)
+      } catch (e) {
+        console.log('[ext-popup] preload write failed:', (e as Error).message)
+      }
+
+      const popupPartition = `ext-popup-${match.id}`
+      const popupSes = session.fromPartition(popupPartition)
+      const extDir = match.path
+
+      try {
+        popupSes.protocol.handle('file', (request: Request) => {
+          const url = new URL(request.url)
+          const requestPath = decodeURIComponent(url.pathname)
+
+          if (!requestPath.startsWith(extDir)) {
+            const localPath = path.join(extDir, requestPath)
+
+            if (fs.existsSync(localPath)) {
+              console.log('[ext-popup] rewrite', requestPath, '→', localPath)
+              return net.fetch(`file://${localPath}`)
+            }
+          }
+
+          return net.fetch(request)
+        })
+
+        console.log('[ext-popup] registered file: interceptor for partition', popupPartition)
+      } catch {
+        console.log('[ext-popup] file: interceptor already registered for', popupPartition)
+      }
+
+      const result = {
+        ok: true,
+        url: `file://${popupFile}`,
+        preload: `file://${preloadDst}`,
+        partition: popupPartition,
+        extensionId: match.id,
+      }
+
+      console.log('[ext-popup] resolvePopupUrl result:', JSON.stringify(result))
+
+      return result
     } catch (err) {
+      console.log('[ext-popup] resolvePopupUrl error:', (err as Error).message)
       return { ok: false, error: (err as Error).message }
     }
   })
@@ -438,6 +497,8 @@ function registerChromeExtCommands(context: ExtensionContext, pluginDir: string)
 
       const popupUrl = `chrome-extension://${match.id}/${opts.popupPath}`
 
+      let userClosed = false
+
       const popup = new BrowserWindow({
         width: 400,
         height: 600,
@@ -447,6 +508,8 @@ function registerChromeExtCommands(context: ExtensionContext, pluginDir: string)
         resizable: true,
         skipTaskbar: true,
         alwaysOnTop: true,
+        show: false,
+        closable: false,
         webPreferences: {
           session: ses,
           contextIsolation: true,
@@ -454,11 +517,31 @@ function registerChromeExtCommands(context: ExtensionContext, pluginDir: string)
         },
       })
 
-      popup.loadURL(popupUrl)
+      popup.webContents.on('did-finish-load', () => {
+        if (popup.isDestroyed()) { return }
 
-      popup.on('blur', () => {
-        if (!popup.isDestroyed()) { popup.close() }
+        popup.show()
+
+        setTimeout(() => {
+          if (popup.isDestroyed()) { return }
+
+          popup.setClosable(true)
+
+          popup.on('blur', () => {
+            userClosed = true
+
+            if (!popup.isDestroyed()) { popup.close() }
+          })
+        }, 1000)
       })
+
+      popup.webContents.on('console-message', (_e: unknown, level: number, msg: string) => {
+        const tag = ['LOG', 'WARN', 'ERR'][level] || 'LOG'
+
+        console.log(`[ext-popup:${tag}] ${msg}`)
+      })
+
+      popup.loadURL(popupUrl)
 
       return { ok: true }
     } catch (err) {

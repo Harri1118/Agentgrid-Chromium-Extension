@@ -1,13 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import type { ChromeExtMeta, CdpInstalledExtension } from '../types'
-import { getChromeExtBridge, getCdpExtBridge } from './preload-bridge'
+import { useState, useEffect, useCallback, useMemo, useSyncExternalStore } from 'react'
+import type { ChromeExtMeta } from '../types'
+import { getChromeExtBridge } from './preload-bridge'
 import { ExtToolbarIcon } from './ExtToolbarIcon'
 import { ExtensionSidebar } from './ExtensionSidebar'
-import {
-  CdpExtensionToolbar,
-  CdpExtensionSidebar,
-  useCdpExtensions,
-} from './CdpExtensionPanel'
 
 type SlotApi = {
   registerSlotComponent: (
@@ -18,15 +13,53 @@ type SlotApi = {
 }
 
 const api = (globalThis as any).__agentgrid_slot_api as SlotApi | undefined
-const extensionId = (globalThis as any).__agentgrid_extension_id as string | undefined
+const extId = (globalThis as any).__agentgrid_extension_id as string | undefined
 
-function BrowserNavbarTrailing(props: Record<string, unknown>) {
-  const partition = (props.partition as string) || ''
+// ---------------------------------------------------------------------------
+// Shared state store keyed by paneId so navbar + sidebar slots communicate
+// ---------------------------------------------------------------------------
+
+type PopupInfo = { extensionId: string; popupUrl: string; chromeExtUrl: string; preload: string | null; partition: string | null }
+
+type PaneState = { panelOpen: boolean; popup: PopupInfo | null }
+
+const defaultState: PaneState = { panelOpen: false, popup: null }
+const paneStates = new Map<string, PaneState>()
+const stateListeners = new Set<() => void>()
+
+function getPaneState(paneId: string): PaneState {
+  return paneStates.get(paneId) ?? defaultState
+}
+
+function updatePaneState(paneId: string, patch: Partial<PaneState>): void {
+  const prev = getPaneState(paneId)
+
+  paneStates.set(paneId, { ...prev, ...patch })
+
+  for (const fn of stateListeners) fn()
+}
+
+function subscribeState(fn: () => void): () => void {
+  stateListeners.add(fn)
+
+  return () => { stateListeners.delete(fn) }
+}
+
+function usePanelOpen(paneId: string): boolean {
+  return useSyncExternalStore(subscribeState, () => getPaneState(paneId).panelOpen)
+}
+
+function usePopup(paneId: string): PopupInfo | null {
+  return useSyncExternalStore(subscribeState, () => getPaneState(paneId).popup)
+}
+
+// ---------------------------------------------------------------------------
+// Hook: manage chrome extensions for a partition
+// ---------------------------------------------------------------------------
+
+function useBrowserExtensions(partition: string) {
   const chromeExt = useMemo(() => getChromeExtBridge(), [])
-
   const [extensions, setExtensions] = useState<ChromeExtMeta[]>([])
-  const [extPanelOpen, setExtPanelOpen] = useState(false)
-  const [extInstallState, setExtInstallState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
 
   const refreshExtensions = useCallback(() => {
     if (!chromeExt) { return }
@@ -41,39 +74,170 @@ function BrowserNavbarTrailing(props: Record<string, unknown>) {
     refreshExtensions()
   }, [partition, chromeExt, refreshExtensions])
 
+  return { chromeExt, extensions, refreshExtensions }
+}
+
+// ---------------------------------------------------------------------------
+// Hook: watch webview URL for Chrome Web Store install detection
+// ---------------------------------------------------------------------------
+
+function useWebviewUrl(webviewRef: { current: unknown } | undefined): string {
+  const [url, setUrl] = useState('')
+
+  useEffect(() => {
+    const wv = webviewRef?.current as any
+
+    if (!wv?.addEventListener) { return }
+
+    const handler = (e: any) => setUrl(e.url ?? '')
+
+    wv.addEventListener('did-navigate', handler)
+    wv.addEventListener('did-navigate-in-page', handler)
+
+    if (wv.getURL) {
+      try { setUrl(wv.getURL()) } catch {}
+    }
+
+    return () => {
+      wv.removeEventListener('did-navigate', handler)
+      wv.removeEventListener('did-navigate-in-page', handler)
+    }
+  }, [webviewRef])
+
+  return url
+}
+
+// ---------------------------------------------------------------------------
+// Slot: browser-navbar-trailing
+// ---------------------------------------------------------------------------
+
+function BrowserNavbarTrailing(props: Record<string, unknown>) {
+  const paneId = (props.paneId as string) || ''
+  const partition = (props.partition as string) || ''
+  const webviewRef = props.webviewRef as { current: unknown } | undefined
+  const chromeExt = useMemo(() => getChromeExtBridge(), [])
+
+  const [extensions, setExtensions] = useState<ChromeExtMeta[]>([])
+  const [installState, setInstallState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
+  const panelOpen = usePanelOpen(paneId)
+  const currentUrl = useWebviewUrl(webviewRef)
+
+  const refreshExtensions = useCallback(() => {
+    if (!chromeExt) { return }
+
+    void chromeExt.list().then(setExtensions).catch(() => {})
+  }, [chromeExt])
+
+  useEffect(() => {
+    if (!partition || !chromeExt) { return }
+
+    void chromeExt.loadIntoPartition({ partition }).catch(() => {})
+    refreshExtensions()
+  }, [partition, chromeExt, refreshExtensions])
+
+  const webStoreExtensionId = useMemo(() => {
+    const match = /chromewebstore\.google\.com\/detail\/[^/]+\/([a-z]{32})/.exec(currentUrl)
+
+    return match?.[1] ?? null
+  }, [currentUrl])
+
+  const handleInstall = useCallback(async () => {
+    if (!webStoreExtensionId || !partition || !chromeExt) { return }
+
+    setInstallState('loading')
+
+    try {
+      const result = await chromeExt.install({ extensionId: webStoreExtensionId, partition })
+
+      if (result.ok) {
+        setInstallState('done')
+        refreshExtensions()
+        setTimeout(() => setInstallState('idle'), 3000)
+      } else {
+        setInstallState('error')
+        setTimeout(() => setInstallState('idle'), 3000)
+      }
+    } catch {
+      setInstallState('error')
+      setTimeout(() => setInstallState('idle'), 3000)
+    }
+  }, [webStoreExtensionId, partition, chromeExt, refreshExtensions])
+
+  const handleExtIconClick = (ext: ChromeExtMeta) => {
+    if (!ext.popupPath || !ext.extensionDir || !partition || !chromeExt) { return }
+
+    const currentPopup = getPaneState(paneId).popup
+
+    if (currentPopup?.extensionId === ext.id) {
+      updatePaneState(paneId, { popup: null })
+
+      return
+    }
+
+    void chromeExt.resolvePopupUrl({
+      partition,
+      extensionDir: ext.extensionDir,
+      popupPath: ext.popupPath,
+    }).then((result: any) => {
+      console.log('[ext-popup] resolvePopupUrl result:', result)
+
+      if (result.ok && result.url) {
+        updatePaneState(paneId, {
+          popup: {
+            extensionId: ext.id,
+            popupUrl: result.url,
+            chromeExtUrl: result.extensionUrl || '',
+            preload: result.preload || null,
+            partition: result.partition || null,
+          },
+        })
+      }
+    })
+  }
+
   if (!chromeExt || !partition) { return null }
 
   const enabledExtensions = extensions.filter((e) => e.enabled)
 
-  const handleExtIconClick = (ext: ChromeExtMeta, e: React.MouseEvent) => {
-    if (!ext.popupPath || !ext.extensionDir) { return }
-
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-
-    void chromeExt.openPopup({
-      partition,
-      extensionDir: ext.extensionDir,
-      popupPath: ext.popupPath,
-      x: window.screenX + rect.right - 400,
-      y: window.screenY + rect.bottom + 4,
-    })
-  }
+  const installButtonLabel = installState === 'loading' ? 'Installing...'
+    : installState === 'done' ? 'Installed'
+      : installState === 'error' ? 'Failed'
+        : 'Add to AgentGrid'
 
   return (
     <>
+      {webStoreExtensionId && installState !== 'done' && (
+        <button
+          className="browser-ext-install-inline-btn"
+          onClick={() => void handleInstall()}
+          disabled={installState === 'loading'}
+          title="Install this extension into AgentGrid"
+        >
+          {installState !== 'loading' && (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          )}
+          {installButtonLabel}
+        </button>
+      )}
+      {installState === 'done' && (
+        <span className="browser-ext-install-done-badge">Installed</span>
+      )}
       {enabledExtensions.map((ext) => (
         <button
           key={ext.id}
           className={`cdp-ext-toolbar-icon${!ext.popupPath ? ' cdp-ext-toolbar-icon-disabled' : ''}`}
-          onClick={(e) => handleExtIconClick(ext, e)}
+          onClick={() => handleExtIconClick(ext)}
           title={ext.name}
         >
           <ExtToolbarIcon ext={ext} />
         </button>
       ))}
       <button
-        className={`browser-nav-btn${extPanelOpen ? ' browser-nav-btn-active' : ''}`}
-        onClick={() => setExtPanelOpen((v) => !v)}
+        className={`browser-nav-btn${panelOpen ? ' browser-nav-btn-active' : ''}`}
+        onClick={() => updatePaneState(paneId, { panelOpen: !panelOpen })}
         title="Extensions"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -88,26 +252,17 @@ function BrowserNavbarTrailing(props: Record<string, unknown>) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Slot: browser-sidebar
+// ---------------------------------------------------------------------------
+
 function BrowserSidebar(props: Record<string, unknown>) {
+  const paneId = (props.paneId as string) || ''
   const partition = (props.partition as string) || ''
-  const chromeExt = useMemo(() => getChromeExtBridge(), [])
+  const panelOpen = usePanelOpen(paneId)
+  const { chromeExt, extensions, refreshExtensions } = useBrowserExtensions(partition)
 
-  const [extensions, setExtensions] = useState<ChromeExtMeta[]>([])
-  const [isOpen, setIsOpen] = useState(false)
-
-  const refreshExtensions = useCallback(() => {
-    if (!chromeExt) { return }
-
-    void chromeExt.list().then(setExtensions).catch(() => {})
-  }, [chromeExt])
-
-  useEffect(() => {
-    if (!partition || !chromeExt) { return }
-
-    refreshExtensions()
-  }, [partition, chromeExt, refreshExtensions])
-
-  if (!chromeExt || !partition || !isOpen) { return null }
+  if (!chromeExt || !partition || !panelOpen) { return null }
 
   return (
     <ExtensionSidebar
@@ -115,78 +270,70 @@ function BrowserSidebar(props: Record<string, unknown>) {
       partition={partition}
       chromeExt={chromeExt}
       onNavigate={() => {}}
-      onClose={() => setIsOpen(false)}
+      onClose={() => updatePaneState(paneId, { panelOpen: false })}
       onRefresh={refreshExtensions}
     />
   )
 }
 
-function CdpNavbarTrailing(props: Record<string, unknown>) {
-  const workspaceId = (props.workspaceId as string) || ''
-  const sessionId = (props.sessionId as string) || ''
-  const cdpExt = useMemo(() => getCdpExtBridge(), [])
+// ---------------------------------------------------------------------------
+// Slot: browser-popup-overlay
+// ---------------------------------------------------------------------------
 
-  const { extensions } = useCdpExtensions({
-    workspaceId,
-    connected: Boolean(workspaceId && cdpExt),
-    cdpExt: cdpExt!,
-  })
+function ExtensionPopupOverlay(props: Record<string, unknown>) {
+  const paneId = (props.paneId as string) || ''
+  const partition = (props.partition as string) || ''
+  const popup = usePopup(paneId)
 
-  if (!cdpExt || !workspaceId || !sessionId) { return null }
+  useEffect(() => {
+    if (!popup) { return }
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { updatePaneState(paneId, { popup: null }) }
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+
+    return () => { document.removeEventListener('keydown', onKeyDown) }
+  }, [paneId, popup])
+
+  useEffect(() => {
+    const detail = {
+      paneId,
+      url: popup?.popupUrl ?? null,
+      preload: popup?.preload ?? null,
+      partition: popup?.partition ?? null,
+      width: 380,
+      height: 520,
+    }
+
+    console.log('[ext-popup] dispatching plugin:webview-overlay', detail)
+    window.dispatchEvent(new CustomEvent('plugin:webview-overlay', { detail }))
+  }, [paneId, popup])
+
+  if (!popup) { return null }
 
   return (
-    <CdpExtensionToolbar
-      extensions={extensions}
-      sessionId={sessionId}
-      cdpExt={cdpExt}
+    <div
+      style={{
+        position: 'absolute',
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        zIndex: 50,
+      }}
+      onClick={() => updatePaneState(paneId, { popup: null })}
     />
   )
 }
 
-function CdpSidebar(props: Record<string, unknown>) {
-  const workspaceId = (props.workspaceId as string) || ''
-  const cdpExt = useMemo(() => getCdpExtBridge(), [])
+// ---------------------------------------------------------------------------
+// Register all slot components
+// ---------------------------------------------------------------------------
 
-  const { extensions, pinnedIds, setPinnedIds, refreshExtensions } = useCdpExtensions({
-    workspaceId,
-    connected: Boolean(workspaceId && cdpExt),
-    cdpExt: cdpExt!,
-  })
-
-  const [isOpen, setIsOpen] = useState(false)
-
-  const handleTogglePin = useCallback((ext: { id: string }) => {
-    setPinnedIds((prev: Set<string>) => {
-      const next = new Set(prev)
-
-      if (next.has(ext.id)) {
-        next.delete(ext.id)
-      } else {
-        next.add(ext.id)
-      }
-
-      return next
-    })
-  }, [setPinnedIds])
-
-  if (!cdpExt || !workspaceId || !isOpen) { return null }
-
-  return (
-    <CdpExtensionSidebar
-      extensions={extensions}
-      workspaceId={workspaceId}
-      cdpExt={cdpExt}
-      pinnedIds={pinnedIds}
-      onTogglePin={handleTogglePin}
-      onRefresh={refreshExtensions}
-      onClose={() => setIsOpen(false)}
-    />
-  )
-}
-
-if (api && extensionId) {
-  api.registerSlotComponent('browser-navbar-trailing', extensionId, BrowserNavbarTrailing)
-  api.registerSlotComponent('browser-sidebar', extensionId, BrowserSidebar)
-  api.registerSlotComponent('cdp-browser-navbar-trailing', extensionId, CdpNavbarTrailing)
-  api.registerSlotComponent('cdp-browser-sidebar', extensionId, CdpSidebar)
+if (api && extId) {
+  api.registerSlotComponent('browser-navbar-trailing', extId, BrowserNavbarTrailing)
+  api.registerSlotComponent('browser-sidebar', extId, BrowserSidebar)
+  api.registerSlotComponent('browser-overlay', extId, ExtensionPopupOverlay)
 }

@@ -37,14 +37,20 @@
   var require_jsx_runtime = __commonJS({
     "react-shim:react/jsx-runtime"(exports) {
       var React = globalThis.__agentgrid_react;
-      exports.jsx = React.createElement;
-      exports.jsxs = React.createElement;
+      function jsx4(type, props, key) {
+        if (key !== void 0) {
+          props = Object.assign({}, props, { key });
+        }
+        return React.createElement(type, props);
+      }
+      exports.jsx = jsx4;
+      exports.jsxs = jsx4;
       exports.Fragment = React.Fragment;
     }
   });
 
   // src/renderer/index.tsx
-  var import_react2 = __toESM(require_react());
+  var import_react = __toESM(require_react());
 
   // src/renderer/preload-bridge.ts
   function getPluginsApi() {
@@ -71,19 +77,6 @@
       openPopup: (args) => invokeCommand("chromeExt.openPopup", args)
     };
   }
-  function getCdpExtBridge() {
-    try {
-      getPluginsApi();
-    } catch {
-      return null;
-    }
-    return {
-      openExtensionManager: (opts) => invokeCommand("cdp.openExtensionManager", opts),
-      openExtensionPopup: (opts) => invokeCommand("cdp.openExtensionPopup", opts),
-      listExtensions: (opts) => invokeCommand("cdp.listExtensions", opts),
-      removeExtension: (opts) => invokeCommand("cdp.removeExtension", opts)
-    };
-  }
 
   // src/renderer/ExtToolbarIcon.tsx
   var import_jsx_runtime = __toESM(require_jsx_runtime());
@@ -97,12 +90,12 @@
   // src/renderer/ExtensionSidebar.tsx
   var import_jsx_runtime2 = __toESM(require_jsx_runtime());
   function ExtensionSidebar({ extensions, partition, chromeExt, onNavigate, onClose, onRefresh }) {
-    const handleUninstall = async (extensionId2) => {
-      await chromeExt.uninstall({ extensionId: extensionId2, partition });
+    const handleUninstall = async (extensionId) => {
+      await chromeExt.uninstall({ extensionId, partition });
       onRefresh();
     };
-    const handleToggle = async (extensionId2, enabled) => {
-      await chromeExt.toggle({ extensionId: extensionId2, enabled });
+    const handleToggle = async (extensionId, enabled) => {
+      await chromeExt.toggle({ extensionId, enabled });
       onRefresh();
     };
     const openWebStore = () => {
@@ -169,163 +162,44 @@
     ] });
   }
 
-  // src/renderer/CdpExtensionPanel.tsx
-  var import_react = __toESM(require_react());
-  var import_jsx_runtime3 = __toESM(require_jsx_runtime());
-  function loadPinnedIds() {
-    try {
-      const raw = localStorage.getItem("cdp-pinned-extensions");
-      return raw ? new Set(JSON.parse(raw)) : /* @__PURE__ */ new Set();
-    } catch {
-      return /* @__PURE__ */ new Set();
-    }
-  }
-  function ExtIcon({ ext }) {
-    if (ext.iconPath) {
-      return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("img", { src: ext.iconPath, alt: ext.name, className: "cdp-ext-toolbar-icon-img" });
-    }
-    return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "cdp-ext-toolbar-icon-letter", children: ext.name.charAt(0).toUpperCase() });
-  }
-  function useCdpExtensions({ workspaceId, connected, cdpExt }) {
-    const [extensions, setExtensions] = (0, import_react.useState)([]);
-    const [extSidebarOpen, setExtSidebarOpen] = (0, import_react.useState)(false);
-    const [pinnedIds, setPinnedIds] = (0, import_react.useState)(loadPinnedIds);
-    (0, import_react.useEffect)(() => {
-      if (!connected) {
-        return;
-      }
-      void cdpExt.listExtensions({ workspaceId }).then(setExtensions);
-    }, [connected, workspaceId, cdpExt]);
-    const refreshExtensions = (0, import_react.useCallback)(() => {
-      void cdpExt.listExtensions({ workspaceId }).then(setExtensions);
-    }, [workspaceId, cdpExt]);
-    return {
-      extensions,
-      extSidebarOpen,
-      setExtSidebarOpen,
-      pinnedIds,
-      setPinnedIds,
-      refreshExtensions
-    };
-  }
-  function CdpExtensionToolbar({ extensions, sessionId, cdpExt, onOpenPopup }) {
-    if (extensions.length === 0) {
-      return null;
-    }
-    const handleOpenPopup = (ext) => {
-      if (!ext.popupPath) {
-        return;
-      }
-      if (onOpenPopup) {
-        onOpenPopup(ext);
-        return;
-      }
-      void cdpExt.openExtensionPopup({
-        sessionId,
-        extensionId: ext.id,
-        popupPath: ext.popupPath
-      });
-    };
-    return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "cdp-ext-toolbar", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "cdp-ext-toolbar-icons", children: extensions.map((ext) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
-      "button",
-      {
-        className: `cdp-ext-toolbar-icon${ext.popupPath ? "" : " cdp-ext-toolbar-icon-disabled"}`,
-        onClick: () => handleOpenPopup(ext),
-        title: ext.name,
-        children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(ExtIcon, { ext })
-      },
-      ext.id
-    )) }) });
-  }
-  function CdpExtensionSidebar({ extensions, workspaceId, cdpExt, pinnedIds, onTogglePin, onRefresh, onClose }) {
-    const handleRemoveExtension = (0, import_react.useCallback)((ext) => {
-      void cdpExt.removeExtension({ workspaceId, extensionId: ext.id }).then(() => {
-        onRefresh();
-      });
-    }, [workspaceId, cdpExt, onRefresh]);
-    const handleInstallExtensions = (0, import_react.useCallback)(() => {
-      onClose();
-      void cdpExt.openExtensionManager({ workspaceId });
-    }, [workspaceId, cdpExt, onClose]);
-    return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "browser-ext-sidebar", onMouseDown: (e) => e.stopPropagation(), children: [
-      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "browser-ext-sidebar-header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "browser-ext-sidebar-title", children: "Extensions" }),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "browser-ext-count", children: extensions.length }),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { className: "browser-ext-sidebar-close", onClick: onClose, title: "Close panel", children: "\xD7" })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "browser-ext-sidebar-list", children: extensions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "browser-ext-empty-state", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("svg", { width: "36", height: "36", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round", style: { opacity: 0.25 }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: "M14.5 4h-5V2a2 2 0 0 1 4 0v2z" }),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("rect", { x: "3", y: "4", width: "18", height: "18", rx: "2" }),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: "M3 10h18" })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "browser-ext-empty-label", children: "No extensions installed" }),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "browser-ext-empty-hint", children: "Use the buttons below to manage extensions" })
-      ] }) : extensions.map((ext) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "browser-ext-card", title: ext.description, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "browser-ext-card-icon", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(ExtIcon, { ext }) }),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "browser-ext-card-body", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "browser-ext-card-name", children: ext.name }),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "browser-ext-card-version", children: [
-            "v",
-            ext.version
-          ] })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "browser-ext-card-actions", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
-            "button",
-            {
-              className: `browser-ext-pin-btn${pinnedIds.has(ext.id) ? " browser-ext-pin-btn-active" : ""}`,
-              onClick: () => onTogglePin(ext),
-              title: pinnedIds.has(ext.id) ? "Unpin from toolbar" : "Pin to toolbar",
-              children: /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: pinnedIds.has(ext.id) ? "currentColor" : "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: "M12 17v5" }),
-                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: "M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" })
-              ] })
-            }
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
-            "button",
-            {
-              className: "browser-ext-remove-btn",
-              onClick: () => handleRemoveExtension(ext),
-              title: "Remove extension",
-              children: /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("polyline", { points: "3 6 5 6 21 6" }),
-                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" })
-              ] })
-            }
-          )
-        ] })
-      ] }, ext.id)) }),
-      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "browser-ext-sidebar-footer", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("button", { className: "browser-ext-webstore-btn", onClick: handleInstallExtensions, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("circle", { cx: "12", cy: "12", r: "10" }),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("line", { x1: "12", y1: "8", x2: "12", y2: "16" }),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("line", { x1: "8", y1: "12", x2: "16", y2: "12" })
-        ] }),
-        "Chrome Web Store"
-      ] }) })
-    ] });
-  }
-
   // src/renderer/index.tsx
-  var import_jsx_runtime4 = __toESM(require_jsx_runtime());
+  var import_jsx_runtime3 = __toESM(require_jsx_runtime());
   var api = globalThis.__agentgrid_slot_api;
-  var extensionId = globalThis.__agentgrid_extension_id;
-  function BrowserNavbarTrailing(props) {
-    const partition = props.partition || "";
-    const chromeExt = (0, import_react2.useMemo)(() => getChromeExtBridge(), []);
-    const [extensions, setExtensions] = (0, import_react2.useState)([]);
-    const [extPanelOpen, setExtPanelOpen] = (0, import_react2.useState)(false);
-    const [extInstallState, setExtInstallState] = (0, import_react2.useState)("idle");
-    const refreshExtensions = (0, import_react2.useCallback)(() => {
+  var extId = globalThis.__agentgrid_extension_id;
+  var defaultState = { panelOpen: false, popup: null };
+  var paneStates = /* @__PURE__ */ new Map();
+  var stateListeners = /* @__PURE__ */ new Set();
+  function getPaneState(paneId) {
+    return paneStates.get(paneId) ?? defaultState;
+  }
+  function updatePaneState(paneId, patch) {
+    const prev = getPaneState(paneId);
+    paneStates.set(paneId, { ...prev, ...patch });
+    for (const fn of stateListeners) fn();
+  }
+  function subscribeState(fn) {
+    stateListeners.add(fn);
+    return () => {
+      stateListeners.delete(fn);
+    };
+  }
+  function usePanelOpen(paneId) {
+    return (0, import_react.useSyncExternalStore)(subscribeState, () => getPaneState(paneId).panelOpen);
+  }
+  function usePopup(paneId) {
+    return (0, import_react.useSyncExternalStore)(subscribeState, () => getPaneState(paneId).popup);
+  }
+  function useBrowserExtensions(partition) {
+    const chromeExt = (0, import_react.useMemo)(() => getChromeExtBridge(), []);
+    const [extensions, setExtensions] = (0, import_react.useState)([]);
+    const refreshExtensions = (0, import_react.useCallback)(() => {
       if (!chromeExt) {
         return;
       }
       void chromeExt.list().then(setExtensions).catch(() => {
       });
     }, [chromeExt]);
-    (0, import_react2.useEffect)(() => {
+    (0, import_react.useEffect)(() => {
       if (!partition || !chromeExt) {
         return;
       }
@@ -333,73 +207,166 @@
       });
       refreshExtensions();
     }, [partition, chromeExt, refreshExtensions]);
-    if (!chromeExt || !partition) {
-      return null;
-    }
-    const enabledExtensions = extensions.filter((e) => e.enabled);
-    const handleExtIconClick = (ext, e) => {
-      if (!ext.popupPath || !ext.extensionDir) {
+    return { chromeExt, extensions, refreshExtensions };
+  }
+  function useWebviewUrl(webviewRef) {
+    const [url, setUrl] = (0, import_react.useState)("");
+    (0, import_react.useEffect)(() => {
+      const wv = webviewRef?.current;
+      if (!wv?.addEventListener) {
         return;
       }
-      const rect = e.currentTarget.getBoundingClientRect();
-      void chromeExt.openPopup({
-        partition,
-        extensionDir: ext.extensionDir,
-        popupPath: ext.popupPath,
-        x: window.screenX + rect.right - 400,
-        y: window.screenY + rect.bottom + 4
-      });
-    };
-    return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(import_jsx_runtime4.Fragment, { children: [
-      enabledExtensions.map((ext) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-        "button",
-        {
-          className: `cdp-ext-toolbar-icon${!ext.popupPath ? " cdp-ext-toolbar-icon-disabled" : ""}`,
-          onClick: (e) => handleExtIconClick(ext, e),
-          title: ext.name,
-          children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(ExtToolbarIcon, { ext })
-        },
-        ext.id
-      )),
-      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-        "button",
-        {
-          className: `browser-nav-btn${extPanelOpen ? " browser-nav-btn-active" : ""}`,
-          onClick: () => setExtPanelOpen((v) => !v),
-          title: "Extensions",
-          children: /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("path", { d: "M14.5 4h-5V2a2 2 0 0 1 4 0v2z" }),
-            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("rect", { x: "3", y: "4", width: "18", height: "18", rx: "2" }),
-            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("path", { d: "M3 10h18" }),
-            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("rect", { x: "7", y: "14", width: "4", height: "4", rx: "1" }),
-            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("rect", { x: "13", y: "14", width: "4", height: "4", rx: "1" })
-          ] })
+      const handler = (e) => setUrl(e.url ?? "");
+      wv.addEventListener("did-navigate", handler);
+      wv.addEventListener("did-navigate-in-page", handler);
+      if (wv.getURL) {
+        try {
+          setUrl(wv.getURL());
+        } catch {
         }
-      )
-    ] });
+      }
+      return () => {
+        wv.removeEventListener("did-navigate", handler);
+        wv.removeEventListener("did-navigate-in-page", handler);
+      };
+    }, [webviewRef]);
+    return url;
   }
-  function BrowserSidebar(props) {
+  function BrowserNavbarTrailing(props) {
+    const paneId = props.paneId || "";
     const partition = props.partition || "";
-    const chromeExt = (0, import_react2.useMemo)(() => getChromeExtBridge(), []);
-    const [extensions, setExtensions] = (0, import_react2.useState)([]);
-    const [isOpen, setIsOpen] = (0, import_react2.useState)(false);
-    const refreshExtensions = (0, import_react2.useCallback)(() => {
+    const webviewRef = props.webviewRef;
+    const chromeExt = (0, import_react.useMemo)(() => getChromeExtBridge(), []);
+    const [extensions, setExtensions] = (0, import_react.useState)([]);
+    const [installState, setInstallState] = (0, import_react.useState)("idle");
+    const panelOpen = usePanelOpen(paneId);
+    const currentUrl = useWebviewUrl(webviewRef);
+    const refreshExtensions = (0, import_react.useCallback)(() => {
       if (!chromeExt) {
         return;
       }
       void chromeExt.list().then(setExtensions).catch(() => {
       });
     }, [chromeExt]);
-    (0, import_react2.useEffect)(() => {
+    (0, import_react.useEffect)(() => {
       if (!partition || !chromeExt) {
         return;
       }
+      void chromeExt.loadIntoPartition({ partition }).catch(() => {
+      });
       refreshExtensions();
     }, [partition, chromeExt, refreshExtensions]);
-    if (!chromeExt || !partition || !isOpen) {
+    const webStoreExtensionId = (0, import_react.useMemo)(() => {
+      const match = /chromewebstore\.google\.com\/detail\/[^/]+\/([a-z]{32})/.exec(currentUrl);
+      return match?.[1] ?? null;
+    }, [currentUrl]);
+    const handleInstall = (0, import_react.useCallback)(async () => {
+      if (!webStoreExtensionId || !partition || !chromeExt) {
+        return;
+      }
+      setInstallState("loading");
+      try {
+        const result = await chromeExt.install({ extensionId: webStoreExtensionId, partition });
+        if (result.ok) {
+          setInstallState("done");
+          refreshExtensions();
+          setTimeout(() => setInstallState("idle"), 3e3);
+        } else {
+          setInstallState("error");
+          setTimeout(() => setInstallState("idle"), 3e3);
+        }
+      } catch {
+        setInstallState("error");
+        setTimeout(() => setInstallState("idle"), 3e3);
+      }
+    }, [webStoreExtensionId, partition, chromeExt, refreshExtensions]);
+    const handleExtIconClick = (ext) => {
+      if (!ext.popupPath || !ext.extensionDir || !partition || !chromeExt) {
+        return;
+      }
+      const currentPopup = getPaneState(paneId).popup;
+      if (currentPopup?.extensionId === ext.id) {
+        updatePaneState(paneId, { popup: null });
+        return;
+      }
+      void chromeExt.resolvePopupUrl({
+        partition,
+        extensionDir: ext.extensionDir,
+        popupPath: ext.popupPath
+      }).then((result) => {
+        console.log("[ext-popup] resolvePopupUrl result:", result);
+        if (result.ok && result.url) {
+          updatePaneState(paneId, {
+            popup: {
+              extensionId: ext.id,
+              popupUrl: result.url,
+              chromeExtUrl: result.extensionUrl || "",
+              preload: result.preload || null,
+              partition: result.partition || null
+            }
+          });
+        }
+      });
+    };
+    if (!chromeExt || !partition) {
       return null;
     }
-    return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+    const enabledExtensions = extensions.filter((e) => e.enabled);
+    const installButtonLabel = installState === "loading" ? "Installing..." : installState === "done" ? "Installed" : installState === "error" ? "Failed" : "Add to AgentGrid";
+    return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+      webStoreExtensionId && installState !== "done" && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+        "button",
+        {
+          className: "browser-ext-install-inline-btn",
+          onClick: () => void handleInstall(),
+          disabled: installState === "loading",
+          title: "Install this extension into AgentGrid",
+          children: [
+            installState !== "loading" && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("line", { x1: "12", y1: "5", x2: "12", y2: "19" }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("line", { x1: "5", y1: "12", x2: "19", y2: "12" })
+            ] }),
+            installButtonLabel
+          ]
+        }
+      ),
+      installState === "done" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "browser-ext-install-done-badge", children: "Installed" }),
+      enabledExtensions.map((ext) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+        "button",
+        {
+          className: `cdp-ext-toolbar-icon${!ext.popupPath ? " cdp-ext-toolbar-icon-disabled" : ""}`,
+          onClick: () => handleExtIconClick(ext),
+          title: ext.name,
+          children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(ExtToolbarIcon, { ext })
+        },
+        ext.id
+      )),
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+        "button",
+        {
+          className: `browser-nav-btn${panelOpen ? " browser-nav-btn-active" : ""}`,
+          onClick: () => updatePaneState(paneId, { panelOpen: !panelOpen }),
+          title: "Extensions",
+          children: /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: "M14.5 4h-5V2a2 2 0 0 1 4 0v2z" }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("rect", { x: "3", y: "4", width: "18", height: "18", rx: "2" }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: "M3 10h18" }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("rect", { x: "7", y: "14", width: "4", height: "4", rx: "1" }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("rect", { x: "13", y: "14", width: "4", height: "4", rx: "1" })
+          ] })
+        }
+      )
+    ] });
+  }
+  function BrowserSidebar(props) {
+    const paneId = props.paneId || "";
+    const partition = props.partition || "";
+    const panelOpen = usePanelOpen(paneId);
+    const { chromeExt, extensions, refreshExtensions } = useBrowserExtensions(partition);
+    if (!chromeExt || !partition || !panelOpen) {
+      return null;
+    }
+    return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
       ExtensionSidebar,
       {
         extensions,
@@ -407,72 +374,62 @@
         chromeExt,
         onNavigate: () => {
         },
-        onClose: () => setIsOpen(false),
+        onClose: () => updatePaneState(paneId, { panelOpen: false }),
         onRefresh: refreshExtensions
       }
     );
   }
-  function CdpNavbarTrailing(props) {
-    const workspaceId = props.workspaceId || "";
-    const sessionId = props.sessionId || "";
-    const cdpExt = (0, import_react2.useMemo)(() => getCdpExtBridge(), []);
-    const { extensions } = useCdpExtensions({
-      workspaceId,
-      connected: Boolean(workspaceId && cdpExt),
-      cdpExt
-    });
-    if (!cdpExt || !workspaceId || !sessionId) {
-      return null;
-    }
-    return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-      CdpExtensionToolbar,
-      {
-        extensions,
-        sessionId,
-        cdpExt
+  function ExtensionPopupOverlay(props) {
+    const paneId = props.paneId || "";
+    const partition = props.partition || "";
+    const popup = usePopup(paneId);
+    (0, import_react.useEffect)(() => {
+      if (!popup) {
+        return;
       }
-    );
-  }
-  function CdpSidebar(props) {
-    const workspaceId = props.workspaceId || "";
-    const cdpExt = (0, import_react2.useMemo)(() => getCdpExtBridge(), []);
-    const { extensions, pinnedIds, setPinnedIds, refreshExtensions } = useCdpExtensions({
-      workspaceId,
-      connected: Boolean(workspaceId && cdpExt),
-      cdpExt
-    });
-    const [isOpen, setIsOpen] = (0, import_react2.useState)(false);
-    const handleTogglePin = (0, import_react2.useCallback)((ext) => {
-      setPinnedIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(ext.id)) {
-          next.delete(ext.id);
-        } else {
-          next.add(ext.id);
+      const onKeyDown = (e) => {
+        if (e.key === "Escape") {
+          updatePaneState(paneId, { popup: null });
         }
-        return next;
-      });
-    }, [setPinnedIds]);
-    if (!cdpExt || !workspaceId || !isOpen) {
+      };
+      document.addEventListener("keydown", onKeyDown);
+      return () => {
+        document.removeEventListener("keydown", onKeyDown);
+      };
+    }, [paneId, popup]);
+    (0, import_react.useEffect)(() => {
+      const detail = {
+        paneId,
+        url: popup?.popupUrl ?? null,
+        preload: popup?.preload ?? null,
+        partition: popup?.partition ?? null,
+        width: 380,
+        height: 520
+      };
+      console.log("[ext-popup] dispatching plugin:webview-overlay", detail);
+      window.dispatchEvent(new CustomEvent("plugin:webview-overlay", { detail }));
+    }, [paneId, popup]);
+    if (!popup) {
       return null;
     }
-    return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-      CdpExtensionSidebar,
+    return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+      "div",
       {
-        extensions,
-        workspaceId,
-        cdpExt,
-        pinnedIds,
-        onTogglePin: handleTogglePin,
-        onRefresh: refreshExtensions,
-        onClose: () => setIsOpen(false)
+        style: {
+          position: "absolute",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+          zIndex: 50
+        },
+        onClick: () => updatePaneState(paneId, { popup: null })
       }
     );
   }
-  if (api && extensionId) {
-    api.registerSlotComponent("browser-navbar-trailing", extensionId, BrowserNavbarTrailing);
-    api.registerSlotComponent("browser-sidebar", extensionId, BrowserSidebar);
-    api.registerSlotComponent("cdp-browser-navbar-trailing", extensionId, CdpNavbarTrailing);
-    api.registerSlotComponent("cdp-browser-sidebar", extensionId, CdpSidebar);
+  if (api && extId) {
+    api.registerSlotComponent("browser-navbar-trailing", extId, BrowserNavbarTrailing);
+    api.registerSlotComponent("browser-sidebar", extId, BrowserSidebar);
+    api.registerSlotComponent("browser-overlay", extId, ExtensionPopupOverlay);
   }
 })();

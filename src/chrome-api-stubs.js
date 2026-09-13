@@ -3,7 +3,15 @@
 // extension service workers and popups can initialize their UI.
 
 ;(function () {
-  if (typeof chrome === 'undefined') return
+  if (typeof chrome === 'undefined') {
+    try {
+      Object.defineProperty(globalThis, 'chrome', {
+        value: {}, writable: true, configurable: true, enumerable: true,
+      })
+    } catch (e) {
+      globalThis.chrome = {}
+    }
+  }
 
   function noopListener () {
     return {
@@ -186,31 +194,110 @@
     onAlarm: noopListener(),
   })
 
-  // Patch tabs events if tabs exists but events are missing
+  // Patch tabs: add missing methods and events
+  var tabStubs = {
+    create: function (opts) {
+      return Promise.resolve({ id: 1, index: 0, windowId: 1, active: true, url: (opts && opts.url) || '', status: 'complete' })
+    },
+    update: function (_tabId, props) {
+      return Promise.resolve({ id: typeof _tabId === 'number' ? _tabId : 1, active: true, url: (props && props.url) || '' })
+    },
+    remove: function () { return Promise.resolve() },
+    sendMessage: function () { return Promise.resolve(null) },
+    connect: function () {
+      return { postMessage: function () {}, onMessage: noopListener(), onDisconnect: noopListener(), disconnect: function () {} }
+    },
+    onRemoved: noopListener(),
+    onUpdated: noopListener(),
+    onCreated: noopListener(),
+    onActivated: noopListener(),
+    onReplaced: noopListener(),
+  }
   if (chrome.tabs) {
-    var tabEvents = {
-      onRemoved: noopListener(),
-      onUpdated: noopListener(),
-      onCreated: noopListener(),
-      onActivated: noopListener(),
-      onReplaced: noopListener(),
-    }
-    var tabKeys = Object.keys(tabEvents)
+    var tabKeys = Object.keys(tabStubs)
     for (var i = 0; i < tabKeys.length; i++) {
       var tk = tabKeys[i]
       try {
         if (typeof chrome.tabs[tk] === 'undefined') {
-          try { chrome.tabs[tk] = tabEvents[tk] } catch (e) {
+          try { chrome.tabs[tk] = tabStubs[tk] } catch (e) {
             try {
               Object.defineProperty(chrome.tabs, tk, {
-                value: tabEvents[tk], writable: true, configurable: true, enumerable: true,
+                value: tabStubs[tk], writable: true, configurable: true, enumerable: true,
               })
             } catch (e2) {}
           }
         }
       } catch (e) {}
     }
+  } else {
+    ensureNamespace(chrome, 'tabs', tabStubs)
   }
+
+  function noopPort (name) {
+    return {
+      name: name || '',
+      postMessage: function () {},
+      disconnect: function () {},
+      onMessage: noopListener(),
+      onDisconnect: noopListener(),
+    }
+  }
+
+  ensureNamespace(chrome, 'runtime', {
+    id: '',
+    getManifest: function () { return { manifest_version: 3, name: '', version: '0.0.0' } },
+    getURL: function (p) { return p },
+    sendMessage: function () { return Promise.resolve(null) },
+    connect: function (opts) { return noopPort(opts && opts.name) },
+    onMessage: noopListener(),
+    onConnect: noopListener(),
+    onInstalled: noopListener(),
+    onStartup: noopListener(),
+    onSuspend: noopListener(),
+    onUpdateAvailable: noopListener(),
+    getContexts: function () { return Promise.resolve([]) },
+    lastError: null,
+  })
+
+  ensureNamespace(chrome, 'storage', {
+    local: {
+      get: function () { return Promise.resolve({}) },
+      set: function () { return Promise.resolve() },
+      remove: function () { return Promise.resolve() },
+      clear: function () { return Promise.resolve() },
+      onChanged: noopListener(),
+    },
+    sync: {
+      get: function () { return Promise.resolve({}) },
+      set: function () { return Promise.resolve() },
+      remove: function () { return Promise.resolve() },
+      clear: function () { return Promise.resolve() },
+      onChanged: noopListener(),
+    },
+    session: {
+      get: function () { return Promise.resolve({}) },
+      set: function () { return Promise.resolve() },
+      remove: function () { return Promise.resolve() },
+      clear: function () { return Promise.resolve() },
+      onChanged: noopListener(),
+    },
+    onChanged: noopListener(),
+  })
+
+  ensureNamespace(chrome, 'i18n', {
+    getMessage: function (key) { return key },
+    getUILanguage: function () { return 'en' },
+    detectLanguage: function () { return Promise.resolve({ isReliable: true, languages: [{ language: 'en', percentage: 100 }] }) },
+  })
+
+  ensureNamespace(chrome, 'permissions', {
+    contains: function () { return Promise.resolve(true) },
+    request: function () { return Promise.resolve(true) },
+    remove: function () { return Promise.resolve(true) },
+    getAll: function () { return Promise.resolve({ permissions: [], origins: [] }) },
+    onAdded: noopListener(),
+    onRemoved: noopListener(),
+  })
 
   // Message responder: reply to common extension popup commands
   // so the popup UI can render even without the real background logic.
@@ -284,8 +371,16 @@
   }
 
   // browser.* polyfill mirrors
+  if (typeof browser === 'undefined') {
+    try {
+      Object.defineProperty(globalThis, 'browser', {
+        value: chrome, writable: true, configurable: true, enumerable: true,
+      })
+    } catch (e) {}
+  }
   if (typeof browser !== 'undefined') {
     var mirrorKeys = [
+      'runtime', 'storage', 'tabs', 'i18n', 'permissions',
       'webNavigation', 'contextMenus', 'notifications', 'declarativeNetRequest',
       'webRequest', 'identity', 'sidePanel', 'offscreen', 'scripting',
       'action', 'windows', 'commands', 'alarms',
